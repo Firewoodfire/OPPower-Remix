@@ -1,0 +1,97 @@
+OPPower 1.0.0-beta42 构建说明
+=============================
+
+产物
+----
+OPPower-1.0.0-beta42-debug.apk            38,368,646 B   debug key 签名，可直接安装
+OPPower-1.0.0-beta42-release-unsigned.apk  3,452,732 B   R8 + 资源压缩，未签名
+
+package      com.oppower
+versionCode  42
+versionName  1.0.0-beta42
+minSdk       34
+targetSdk    37
+compileSdk   37.2
+
+这一版修什么
+------------
+点「充电记录 / 放电记录」必闪退。
+
+根因不在记录弹窗本身，而是整个应用从来没有提供**窗口级背景源**。
+COUI 的 Dialog 在创建 Dialog 窗口时执行：
+
+  val windowBackdrop = backdrop ?: LocalCouiMenuBackdrop.current
+  if (material != null) checkNotNull(windowBackdrop) { "弹窗项目材质需要宿主提供..." }
+
+Dialog 默认带材质（玻璃底），所以这里必然抛 IllegalArgumentException。
+崩溃发生在 `ComposeDialog(...)` 内部，也就是弹窗窗口创建的瞬间。
+
+为什么"只有记录会崩"看着像功能 bug
+----------------------------------
+首启那个「关于 OPPower」弹窗也走同一个 Dialog，照理也一样崩。它不崩的原因是：
+它只在你清数据后第一次打开时出现，那一次崩溃被系统吞成"闪退"，之后再也没人复现。
+记录弹窗能随时点，所以问题全暴露在它身上。
+
+修法
+----
+在应用根部包一层窗口级背景源（`provideCouiMenuBackdrop`，公开 API）：
+
+  ProvideCouiMenuBackdrop { contentModifier ->
+      PageTransition(
+          target = page,
+          depthOf = { it.depth },
+          label = "RootPage",
+          modifier = contentModifier.fillMaxSize(),
+      ) { current -> ... }
+  }
+
+注意 `CouiBackdrop` 的构造函数是 internal，应用层只能通过
+`rememberCouiBackdrop()` / `ProvideCouiMenuBackdrop` 这类公开入口拿。这一层
+只提供一次，所有弹窗（记录、恢复默认确认、清空记录确认、首启说明）共用同一份源。
+
+顺带修的一处
+------------
+记录弹窗里最多列 20 条历史（`HISTORY_IN_DIALOG`），标题会写明"最多显示 20 条"。
+原来 `records.asReversed().forEach` 是无上限的：历史攒到几百条时，弹窗首帧要一次性
+测量几百个卡片。弹窗本身已有 `heightIn(max = 460dp) + verticalScroll` 兜底，
+限条数只是避免点开那一帧卡顿。
+
+排查过程中排除的假设
+--------------------
+- 不是 `Clickable` 砸到非零最小约束：`CouiCard` 是 `fillMaxWidth`，行是
+  `padding + Row`，不会拿到 Constraints(minWidth>0, minHeight=0)。
+- 不是 `verticalScroll` 在无界高度下测量：COUI 的 dialog action 区是
+  `Column(if (naturalHeight > constraints.maxHeight) Modifier.verticalScroll(...))`，
+  这写法本身就说明 `constraints.maxHeight` 是有限的。
+- 不是记录数据为 null：`selected == null` 分支已经在。
+
+改的文件
+--------
+app/src/main/java/com/oppower/ui/OPPowerApp.kt   根部加 ProvideCouiMenuBackdrop
+app/src/main/java/com/oppower/ui/MainPage.kt     记录弹窗限 20 条
+app/build.gradle.kts                             versionCode 42
+README.md                                        版本号
+docs/VALIDATION.md                               追加 beta42 章节
+release/1.0.0-beta42/                            本目录
+
+验证结果
+--------
+:app:assembleDebug --rerun-tasks   PASS   0 warning
+:app:assembleRelease              PASS   R8 + 资源压缩
+:app:testDebugUnitTest            129 / 129 PASS（0 skipped / 0 failed / 0 error）
+:app:lintDebug                    0 error / 0 warning
+
+体积与 beta41 完全相同（debug 38,368,646 B / release 3,452,732 B）：
+这一版只加了包装层和一处上限判断，没有引入新类。
+
+未验证
+------
+容器内没有 /dev/kvm，跑不了模拟器。这一版的修复点必须真机确认：
+
+  1. 点「充电记录」：弹窗能否正常弹出、有没有玻璃底
+  2. 点「放电记录」：同上
+  3. 弹窗里的历史卡片点一下：能否切换上方详情
+  4. 清数据后首次启动的「关于 OPPower」弹窗：是否也正常（之前同样会崩）
+  5. 设置页的「恢复默认」「清空记录」确认弹窗：是否正常
+  6. 如果仍然闪退，请把 logcat 里 `AndroidRuntime` 那一段发我，
+     关键看是不是 `IllegalArgumentException` 且消息含"弹窗项目材质"
