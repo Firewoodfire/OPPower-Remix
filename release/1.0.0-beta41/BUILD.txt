@@ -1,0 +1,108 @@
+OPPower 1.0.0-beta41 构建说明
+=============================
+
+产物
+----
+OPPower-1.0.0-beta41-debug.apk            38,368,646 B   debug key 签名，可直接安装
+OPPower-1.0.0-beta41-release-unsigned.apk  3,452,732 B   R8 + 资源压缩，未签名
+
+package      com.oppower
+versionCode  41
+versionName  1.0.0-beta41
+minSdk       34
+targetSdk    37
+compileSdk   37.2
+
+这一版做了什么
+--------------
+把原来堆在主页一屏里的三块信息拆成底栏三页：
+
+  主页    →  当前状态 + 记录与通知 + 实时曲线
+  快充    →  快充控制（开关 / 档位 / 保活 / 策略 / 状态 / 电流上限 / 权限）
+  检测    →  充电检测（阶段 / 能力 / 充满预估 / 利用率 / 稳定性 / 异常）
+
+底栏用 COUI 的 `navigation.NavigationBar`，是 ColorOS 那种悬浮胶囊，不是
+M3 的贴底实心栏。
+
+三个必须做对的点
+----------------
+1) NavigationBar 只能放在 Scaffold 的 bottomBar 栏位
+
+   它默认从 `LocalCouiBackdrop.current` 取背景源做玻璃采样，取不到就
+   `checkNotNull` 抛异常。而 `CouiBackdrop` 的构造函数是 internal，应用层
+   new 不出来，只能靠 Scaffold 的栏位通过 `ProvideCouiBackdrop` 下发。
+   所以底栏不是浮在 Box 上层，而是占 bottomBar 槽位。
+
+2) 三个页签各有自己的 LazyListState 和折叠行为
+
+   val homeScroll / chargeScroll / detectScroll 各一份，behavior 也各一份。
+   COUI 的折叠状态 remember 在各自调用点上，三份互不干扰——切页时换的是
+   behavior 实例，新页标题从展开态开始，不会继承上一页的收起偏移。
+   只用一个共享 behavior 的话，从滚到底的主页切到快充页，新页标题一进去
+   就是收起的、正文还会被顶到顶栏下面。
+
+3) 底栏高度只进 LazyColumn 的内容内边距，不缩小容器
+
+   Scaffold 的 innerPadding.bottom 就是底栏高度（胶囊 56dp + 上下 16dp +
+   安全区，约 96dp）。如果按常规 `Modifier.padding(innerPadding)` 处理，
+   正文会被截到胶囊上沿，视觉上多出一条 96dp 的空白带。
+   这一版改成：
+
+     LazyColumn(
+         modifier = Modifier.fillMaxSize().padding(top = topInset),
+         contentPadding = PaddingValues(top = 8.dp, bottom = bottomInset + 24.dp),
+     )
+
+   正文延伸到底栏后面，滚过的卡片从胶囊玻璃下透出来。
+
+切页动效
+--------
+180ms 淡入 / 120ms 淡出，**不做位移**。理由：三页共用同一个顶栏和同一个
+底栏，横向推入会让人以为进入了二级页；二级页（充电设置、通用设置）才是
+beta36 那套 240ms 横推。列表滚动位置由三份独立的 LazyListState 保住，
+不需要 SaveableStateHolder。
+
+两处顺手的补齐
+--------------
+- 快充页顶部加了一行「实时功率」。拆分后主页那颗大数字看不到了，但调档位时
+  最想知道的就是现在多少瓦——纯展示行，不碰任何控制逻辑。
+- 检测关闭时不再是一片空白，改成「检测已关闭 / 去开启」一行，点击直达检测设置。
+
+返回键
+------
+停在快充或检测页时，返回键先回主页，而不是直接退出应用。
+（OPPowerApp 的 BackHandler 只在 page != MAIN 时启用，两者不冲突。）
+
+改动文件
+--------
+app/src/main/java/com/oppower/ui/MainPage.kt   重构：MainTab + 底栏 + 三页内容
+app/build.gradle.kts                           versionCode 41
+README.md                                      新增「底栏」小节，修正大标题页适用范围
+docs/VALIDATION.md                             追加 beta41 章节
+release/1.0.0-beta41/                          本目录
+
+验证结果（全部为强制全量重编）
+------------------------------
+:app:assembleDebug --rerun-tasks   PASS   0 warning
+:app:assembleRelease              PASS   R8 + 资源压缩
+:app:testDebugUnitTest            129 / 129 PASS（0 skipped / 0 failed / 0 error）
+:app:lintDebug                    0 error / 0 warning
+
+体积
+----
+beta40 → beta41：debug 38,352,262 → 38,368,646（+16 KB）
+                 release  3,398,188 → 3,452,732（+54 KB）
+
+增量来自 NavigationBar 的浮动材质/阴影绘制器（`CouiFloatingRenderer`）以及
+AnimatedContent 的转场，这些之前都没进过调用图。
+
+未验证
+------
+容器内没有 /dev/kvm，跑不了模拟器。真机重点看：
+
+  1. 底栏胶囊的玻璃采样：滚动时卡片能否从胶囊下正常透出，有没有黑边或错位
+  2. 三个页签来回切：标题是否每次都是展开态，列表位置是否各自记住
+  3. 快充页只有一组十几行时，底栏下方的内容留白是否合适（bottomInset + 24dp）
+  4. 在检测页按返回键：是否回主页而不是退出应用
+  5. 三页顶栏的折叠是否独立：主页折到底后切快充，快充标题应当展开
+  6. 切页 180ms 淡入期间，顶栏标题从「OPPower」变成「快充控制」会不会有重影
