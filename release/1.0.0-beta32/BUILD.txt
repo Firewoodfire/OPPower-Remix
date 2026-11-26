@@ -1,0 +1,49 @@
+OPPower 1.0.0-beta32
+====================
+
+versionCode : 32
+versionName : 1.0.0-beta32
+构建日期    : 2026-11-23
+
+产物
+----
+OPPower-1.0.0-beta32-debug.apk            11,309,442 bytes（debug 签名，可直接安装）
+OPPower-1.0.0-beta32-release-unsigned.apk  1,671,050 bytes（未签名，需自备 keystore）
+
+工具链
+------
+JDK 17 / Android SDK 36（compileSdk 36, minSdk 26）/ Gradle 8.13 / AGP 8.10.1 / Kotlin 2.1.21
+
+验证
+----
+:app:testDebugUnitTest   125 passed, 0 failed
+:app:lintDebug           0 errors, 21 warnings, 1 hint
+
+本次改动（二级限流：用 Shizuku 把功率压到连续值）
+------------------------------------------------
+1. 特权层新增受限 sysfs 通道（AIDL 5/6/7）：
+   readChargeLimitNodes / writeChargeLimitNodes / restoreChargeLimitNodes
+   - 节点路径写死在服务端（battery|main 两处），调用方只能传毫安值，传不了路径
+   - AllowedCommands 没有放宽：`echo > /sys/...` 依然被 shell 通道拒绝（有单测锁定）
+   - require(plausibleMa) 校验 500..12000，越界直接抛 IllegalArgumentException
+2. 单位自适应：QCOM 常见 µA（3000000）、MTK/部分 OPPO 直接 mA（3000），
+   按量级判断（>20000 视为 µA）并用 plausibleMa 兜底，避免写错 1000 倍
+3. 两级控制模型 controller/ChargeCurrentLimit.kt：
+   档位（cosa，离散）负责进对功率族，电流上限（连续）负责族内压到目标值
+   - 温度 40°C 枢轴：每高 1°C 收紧 6%，每低 1°C 放宽 3%（夹在 0.45..1.25）
+   - SOC 60% 起每 1% 收紧 0.7%，85% 起再叠 1.6%（夹在 0.35..1.0）
+   - 400mA/步 + 150mA 滞回 + 2.5s 冷却，避免充电器频繁重协商
+4. 退出路径全覆盖：拔电 / 满电 / SOC 锁 / 息屏暂停 / 关闭总开关 / 一键恢复 /
+   进入 Level 0 保活，全部会写回首次介入前读到的原始值（幂等，失败下轮重试）
+5. 稳态漂移核对：每 10 秒回读一次节点，被系统热控刷回默认就立刻重写；
+   容差 100mA 吸收 sysfs 量化误差
+6. 性能：热控状态加 2 秒短缓存，1 秒控制循环的 Binder 往返从 3 次降到约 1 次/2 秒，
+   requestThermalRefresh 成功后主动失效缓存，不会吃掉"刚触发就重读"这条路径
+7. UI：
+   - 快充设置页新增「电流上限（二级限流）」分组：开关 + 目标上限滑块（0=跟随档位）
+     + 本机支持 / 已写入上限 / 系统回读 三行状态
+   - 主页面功率卡在限流生效时补一行「电流上限 N mA · 已回读确认」
+   - 通知栏在档位描述后追「· 限流 N mA」
+   - ControllerStatus 新增 chargeLimitSupported，UI 能区分"待授权/无节点/已生效"
+
+功能零删减：beta31 的 90 项单测全部保留且通过，本次新增 35 项（合计 125）。
