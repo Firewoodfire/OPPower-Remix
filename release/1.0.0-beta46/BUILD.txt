@@ -1,0 +1,86 @@
+OPPower 1.0.0-beta46 构建说明
+================================
+
+修一个真崩溃：点「充电记录 / 放电记录」直接闪退。beta42 已经"修"过一次，
+但那次找错了地方。
+
+根因
+----
+COUI 的 `CouiDialogAction` 在构造函数里就有这条校验：
+
+    init {
+        require(style != CouiDialogActionStyle.Primary || colors != null) {
+            "主操作必须由宿主提供主题配色"
+        }
+    }
+
+我们两处都写成了 `style = Primary` 而不传 `colors`，于是 `require` 失败抛
+IllegalArgumentException。这个异常抛在**组合期**——也就是弹窗真正要显示的
+那一帧，所以表现为"点一下立刻闪退"，而不是启动就崩。
+
+同一个问题在库里还有第二道防线（`CouiDialogButton.kt`）：
+
+    else error("主操作必须由宿主显式提供配色")
+
+两处都中：
+- `ui/MainPage.kt` RecordDialog 的「关闭」按钮 → 充电记录 / 放电记录闪退
+- `ui/OPPowerApp.kt` FirstRunDialog 的「知道了」按钮 → 首次启动说明会崩
+  （老用户 introSeen 已是 true，所以一直没撞上，新装用户第一次打开就会中）
+
+beta42 的误判
+-------------
+上一轮我判断是「应用从未提供窗口级背景源，Dialog 创建窗口时 checkNotNull 抛异常」，
+于是加了 `ProvideCouiMenuBackdrop`。实际读库源码后：
+
+    CouiDialogWindow.kt:174
+    val windowBackdrop = backdrop ?: LocalCouiMenuBackdrop.current
+    if (material != null) { checkNotNull(windowBackdrop) { ... } }
+
+`checkNotNull` 只在 `material != null` 时执行。我们从没传过 `material`，
+所以那条路径根本不会走到。`ProvideCouiMenuBackdrop` 不是必需的——
+保留无害（将来若要用材质弹窗还得靠它），但它不是这次崩溃的原因。
+
+修复
+----
+1. 新增 `ui/CouiKit.kt` 的 `couiPrimaryAction(text, onClick)`：
+
+       @Composable
+       internal fun couiPrimaryAction(text: String, onClick: () -> Unit): CouiDialogAction {
+           val accent = CouiPageDefaults.themeColors().accent
+           return CouiDialogAction(
+               text = text, onClick = onClick,
+               style = CouiDialogActionStyle.Primary,
+               colors = CouiDialogDefaults.primaryActionColors(accent),
+           )
+       }
+
+   配色由封装带死，调用方拿不到漏传的机会。两处调用改为
+   `confirmAction = couiPrimaryAction("关闭", onDismiss)`。
+
+2. 新增 `CouiDialogActionContractTest`（3 条）把这个库行为钉住：
+   Primary 不带配色必须抛、带配色必须过、Secondary 不要求配色。
+   将来升级 COUI 若改了这条约束，测试会先响。
+
+验证
+----
+:app:assembleDebug --rerun-tasks   PASS，0 warning
+:app:assembleRelease               PASS（R8 + 资源压缩）
+:app:testDebugUnitTest             141 / 141 PASS（新增 3 条）
+:app:lintDebug                     0 error / 0 warning
+
+产物
+----
+OPPower-1.0.0-beta46-debug.apk             38,417,798 bytes
+OPPower-1.0.0-beta46-release-debugkey.apk   3,487,859 bytes（可安装）
+OPPower-1.0.0-beta46-release-unsigned.apk   3,469,116 bytes（未签名）
+
+装完要验的三处
+--------------
+1. 主页 → 充电记录：弹窗正常出现，有「关闭」按钮且配色是主题绿。
+2. 主页 → 放电记录：同上。
+3. 设置→数据管理里「清除全部本地记录」的确认弹窗（走 Secondary，不受影响，
+   但既然动了弹窗代码顺手看一眼）。
+4. 如果之前没看过首次启动说明（新装或清过数据），顺便确认它也不再崩。
+
+顺带：beta45 的热控诊断结果还没拿到。这一版没动那部分代码，
+装上之后仍然可以在 设置 → 硬件修正 → 热控诊断 里读一次。
