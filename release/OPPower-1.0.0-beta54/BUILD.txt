@@ -1,0 +1,19 @@
+OPPower 1.0.0-beta54 (versionCode 54)
+
+构建日期：2026-11-26
+
+验证：
+  assembleDebug --rerun-tasks : PASS, 0 warning
+  assembleRelease              : PASS
+  testDebugUnitTest            : 173 / 173 PASS
+  lintDebug                    : 0 errors, 2 warnings (dependency-version only)
+
+产物：
+  OPPower-1.0.0-beta54-debug.apk            38,483,330 bytes
+  OPPower-1.0.0-beta54-release-debugkey.apk  3,520,683 bytes
+
+本轮：
+  - 大标题页从 CollapsingTopAppBar 换成 LargeTopAppBar
+  - collapsedHeight = 0.1.dp + graphicsLayer alpha，标题随折叠淡出、顶栏整条退出
+  - 返回键移到 navigationIcon 槽，不再用顶栏外浮层
+  - 删除 CrashNotice 启动提示条，崩溃记录只在 设置 → 数据管理
