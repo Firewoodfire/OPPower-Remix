@@ -1,0 +1,86 @@
+OPPower 1.0.0-beta38 构建说明
+=============================
+
+产物
+----
+OPPower-1.0.0-beta38-debug.apk            38,335,878 B   debug key 签名，可直接安装
+OPPower-1.0.0-beta38-release-unsigned.apk  3,496,492 B   R8 + 资源压缩，未签名
+
+package      com.oppower
+versionCode  38
+versionName  1.0.0-beta38
+minSdk       34
+targetSdk    37
+compileSdk   37.2
+
+这一版做了什么
+--------------
+设置主页改成 OPPO 设置那种"无组标题的连续卡片 + 行首彩色图标"布局。
+
+COUI 的 Item 本来就留了图标槽（icon = 24dp、与标题间距 iconSpacing = 16dp），
+项目之前一直没往里放东西。这次全部填上。
+
+图标从哪来
+----------
+全部来自 CouiIcons，没有一个自绘：
+
+  Shizuku 授权    Filled.ShieldCheck      紫
+  外观设置        Filled.Sun              橙
+  充电检测        Filled.Health           青
+  通知设置        Filled.Bell             红
+  稳定运行        Filled.Fan              绿
+  硬件修正        Filled.GridSliders      蓝
+  系统与诊断      Filled.SettingDetail    紫红
+  数据管理        Filled.CloudData        紫
+  常见问题        Filled.BookOpen         橙
+  关于 OPPower    Filled.Info             青
+
+已核对：这几个图标在 COUI-Kit 上游 main 分支的 CouiIcons.kt 里都存在，
+不是本地 demo 才有的扩展。
+
+彩色底的做法
+------------
+Item 的图标槽只有 24dp，截图里那种"白底圆形彩色图标"是系统设置的整图标位图，
+这个 demo 包里没有（包里 14 张位图全是启动页、封面、占位图，没有图标）。
+所以改用「单色 COUI 图标 + 主色 14%（深色 22%）底 + 超椭圆圆角」：
+
+  Box(26dp).clip(CouiShape(8.dp, 2.5f)).background(tint.copy(alpha = ...))
+      Icon(16dp, tint = tint)
+
+底块 26dp 比槽位大 1dp，Item 内部是居中的 Box，不会裁切。
+六色板 CouiIconTint 分昼夜两套，深色主题整体提亮。
+
+分组也改了
+----------
+原来是三个带标题的组（常用 / 设备与数据 / 帮助与关于），现在是每 4 行一张
+不带标题的卡片，靠组间距分开 —— 这是 OPPO 设置的做法：分组靠留白表达，
+不靠文字标签。搜索时按结果自然成组。
+
+顺带把 BasicTextField 换掉
+--------------------------
+CouiSearchField 用的是 value/onValueChange 老签名，Compose 1.13 已标废弃。
+改成 rememberTextFieldState + snapshotFlow 回传 + TextFieldLineLimits.SingleLine，
+行为不变，编译警告清零。
+
+验证结果
+--------
+:app:assembleDebug          PASS
+:app:assembleRelease        PASS（R8 + 资源压缩）
+:app:testDebugUnitTest      129 / 129 PASS
+:app:lintDebug              0 error / 0 warning（No issues found.）
+Kotlin 编译                    0 warning
+
+体积
+----
+beta37 → beta38：debug +4 B，release +144,388 B。
+release 的增量来自 10 个 ImageVector 的路径数据（R8 只能压缩不能消除，
+因为它们都通过反射式的 Companion getter 暴露）。
+
+未验证
+------
+容器内没有 /dev/kvm，跑不了模拟器，图标观感只能真机确认。重点看：
+
+  1. 16dp 图标在 24dp 槽里的视觉居中，深色下对比够不够
+  2. 26dp 底块是否会与相邻分隔线或摘要文字挤压（行高 48dp + 两行摘要时）
+  3. 六色在浅色主题下是否都够"ColorOS"，尤其红与紫红是否太接近
+  4. 搜索结果只剩 1-2 行时，卡片高度是否自然
