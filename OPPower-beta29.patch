@@ -1,0 +1,4617 @@
+diff --git a/README.md b/README.md
+index cde984a..7ea676f 100644
+--- a/README.md
++++ b/README.md
+@@ -10,18 +10,25 @@ OPPower 是面向 realme Neo8（RMX8899）和 ColorOS 17 的亮屏快充控制
+ - 最大输出默认持续保持 gear 0，由系统原生热控调节基础档；20–40 W 和 10–30 W 档保留温度适配，可切换为两条自定义温度条件和两条自定义电量条件。
+ - 插电自动校准、拔电恢复、达到 80% 电量暂停快充增强、充满后恢复系统默认。
+ - 前台服务保持控制；划掉界面或进入后台后仍继续执行控制。关闭总开关、拔电、电量暂停或充满时恢复系统默认；系统销毁并重建服务时保留当前控制意图，重启后自动继续。
+-- 电流、电压、温度、电量，以及按 LLPower 节奏采样、保留 24 小时原始记录、可左右拖动的真实时间功率/温度曲线。
++- 电流、电压、温度、电量，以及按 LLPower 节奏采样、保留 24 小时原始记录、可左右拖动的真实时间功率/温度曲线；曲线可导出为 CSV（经系统分享面板发送到任意应用）。
++- 充电检测：参考 Scene 的信息分层，先回答“充得多快”（实时功率、协商协议、电压电流、充电阶段、预计充满），再回答“为什么慢”（充电器能力对比、利用率、异常归因），最后才是“电池健康”（满充容量、设计容量、健康度、循环次数）。数据来自 `sysfs/power_supply` 只读快照，检测间隔 3–30 秒可调，异常与充满可分别提醒。
+ - AC 快充时若主电流或电压无效，先按 LLPower 的顺序尝试 `CURRENT_NOW`、`CURRENT_AVERAGE`、sysfs 和一次只读 `dumpsys battery`；仍为偶发零值时，最多沿用 3.5 秒同一帧的最近可靠电流与电压，之后接受真实零值。正常非零功率变化不做平滑或防抖，按 1 秒立即更新。
+ - 页面指标每秒刷新；曲线在充电亮屏时每 3 秒、充电熄屏时每 5 秒、未充电时每 180 秒采样，图表显示最近 8 小时并默认显示 2 小时窗口。
+-- 设置包含外观、通知、稳定运行、高级保活、硬件修正、系统与诊断、数据管理、常见问题、关于与许可。
++- 设置包含外观、通知、充电检测、稳定运行、高级保活、硬件修正、系统与诊断、数据管理、常见问题、关于与许可；设置主页支持关键字搜索，直接命中条目。
+ - 设置主页和系统页提供 Shizuku 状态与授权入口；未安装时打开下载页，未运行时打开 Shizuku，已运行时直接向 OPPower 申请授权。
+-- 外观支持主题模式、六种配色、字体和界面比例、卡片不透明度及隐藏最近任务。
++- 外观支持主题模式、六种配色、字体和界面比例、列表密度（紧凑 42dp / 标准 48dp 行高）、卡片不透明度及隐藏最近任务。
+ - 通知支持内容选择、刷新与熄屏刷新间隔、充满/熄屏自动精简；接电即显示，总开关关闭时也会显示未启用状态。Android 16 与 ColorOS 17 使用 LLPower 同类的实时活动卡片，需在系统通知设置开启“流体云显示实时活动”；启用后不显示应用图标、收放箭头、额外“打开 OPPower”行或“本次关闭”按钮，并保留亮屏快充档位。
+ - 硬件修正支持电流方向、双芯电流、虚拟电压和绝对值显示；系统页显示真实诊断字段并打开系统权限入口。
+ - 高级保活提供可选的 1×1 透明悬浮窗与不读取屏幕内容、不自动点击的无障碍保活服务。
+ - Shizuku 命令白名单和写入回读校验。
+ - 首次启动说明，以及 QQ 群号复制和邀请链接。
+ 
++## 界面规范
++
++界面按 [COUI-Kit](https://github.com/ItosEO/COUI-Kit) 公开的 ColorOS 17「凝光视效」度量重做：卡片 24dp 连续圆角、页面左右 16dp、行内 16dp、行高 48dp、分隔线 0.33dp、组标题与脚注内缩 32dp、开关 44×24 配 18dp 滑块、标题 16sp/Medium 与摘要 13sp。
++
++该库当前要求 `compileSdk 37` 与 AGP 9.1 才能消费其 AAR，与本项目的 SDK 36 / AGP 8.10 基线冲突，因此 OPPower **不引入该二进制依赖**，而是按同一套公开度量在 `ui/CouiUi.kt` 内独立实现等价组件。设计规范来源已在应用内“开源许可”页署名（MPL 2.0）。
++
+ ## 使用条件
+ 
+ - 设备：realme Neo8 RMX8899，ColorOS 17。其他机型或固件未验证。
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index d84028d..3ccb380 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -78,6 +78,16 @@
+                 android:resource="@xml/accessibility_keep_alive" />
+         </service>
+ 
++        <provider
++            android:name="androidx.core.content.FileProvider"
++            android:authorities="${applicationId}.files"
++            android:exported="false"
++            android:grantUriPermissions="true">
++            <meta-data
++                android:name="android.support.FILE_PROVIDER_PATHS"
++                android:resource="@xml/file_paths" />
++        </provider>
++
+         <provider
+             android:name="rikka.shizuku.ShizukuProvider"
+             android:authorities="${applicationId}.shizuku"
+diff --git a/app/src/main/aidl/com/oppower/shizuku/IPrivilegedCommandService.aidl b/app/src/main/aidl/com/oppower/shizuku/IPrivilegedCommandService.aidl
+index 3f58489..9d93e53 100644
+--- a/app/src/main/aidl/com/oppower/shizuku/IPrivilegedCommandService.aidl
++++ b/app/src/main/aidl/com/oppower/shizuku/IPrivilegedCommandService.aidl
+@@ -5,4 +5,5 @@ interface IPrivilegedCommandService {
+     void exit() = 1;
+     String execute(String command) = 2;
+     int[] readBatteryFallback() = 3;
++    String readPowerSupplyDump() = 4;
+ }
+diff --git a/app/src/main/java/com/oppower/MainActivity.kt b/app/src/main/java/com/oppower/MainActivity.kt
+index 5dd6615..d02e7bf 100644
+--- a/app/src/main/java/com/oppower/MainActivity.kt
++++ b/app/src/main/java/com/oppower/MainActivity.kt
+@@ -61,6 +61,8 @@ class MainActivity : ComponentActivity() {
+                     onRestore = viewModel::restoreAll,
+                     onDismissIntro = viewModel::dismissIntro,
+                     onClearHistory = viewModel::clearHistory,
++                    onExportHistory = viewModel::exportHistoryCsv,
++                    onResetSettings = viewModel::resetSettings,
+                 )
+             }
+         }
+diff --git a/app/src/main/java/com/oppower/battery/BatteryReader.kt b/app/src/main/java/com/oppower/battery/BatteryReader.kt
+index e377dea..e2e9205 100644
+--- a/app/src/main/java/com/oppower/battery/BatteryReader.kt
++++ b/app/src/main/java/com/oppower/battery/BatteryReader.kt
+@@ -156,9 +156,13 @@ internal data class ResolvedBatteryMeasurement(
+  * charger remains connected. Restrict the short hold to AC charging states in
+  * which zero can be transient; a disconnect, a full battery, or zero signals
+  * lasting beyond the hold window are accepted immediately.
++ *
++ * The hold is 3.5 s to match DESIGN.md and VALIDATION.md. With a one-second
++ * page cadence that keeps at most three replayed frames before the real zero
++ * is shown, which is the behaviour the release notes promise.
+  */
+ internal class CurrentSampleStabilizer(
+-    private val holdMillis: Long = 5_000L,
++    private val holdMillis: Long = 3_500L,
+ ) {
+     private var lastReliable: ResolvedBatteryMeasurement? = null
+     private var lastReliableAtMillis = 0L
+diff --git a/app/src/main/java/com/oppower/controller/ChargingController.kt b/app/src/main/java/com/oppower/controller/ChargingController.kt
+index d6c6fad..48d6a18 100644
+--- a/app/src/main/java/com/oppower/controller/ChargingController.kt
++++ b/app/src/main/java/com/oppower/controller/ChargingController.kt
+@@ -191,11 +191,11 @@ class ChargingController(
+                 return ControllerStatus(ControllerPhase.TEMPERATURE_PAUSED, decision.reason)
+             }
+ 
+-            val target = confirmGear(requested!!, settings, decision.tier)
++            val target = confirmGear(requested, settings, decision.tier)
+             if (target == null) {
+                 return ControllerStatus(
+                     ControllerPhase.ACTIVE,
+-                    "等待 ${if (requested!! > (lastAppliedGear ?: requested)) settings.temperatureDownshiftSeconds else settings.temperatureUpshiftSeconds} 秒确认 · ${decision.reason}",
++                    "等待 ${if (requested > (lastAppliedGear ?: requested)) settings.temperatureDownshiftSeconds else settings.temperatureUpshiftSeconds} 秒确认 · ${decision.reason}",
+                     desiredGear = requested,
+                     appliedCosa = currentCosa,
+                     observedGear = lastObservedGear,
+@@ -567,16 +567,21 @@ class ChargingController(
+ 
+     private fun readPolicyFresh(): ThermalPolicy {
+         val raw = shizuku.readThermalPolicy()
+-        val charge = Regex("chargeVal:\\s*(-?\\d+)").find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull()
+-        val speed = Regex("speedChargeAdd:\\s*(-?\\d+)").find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull()
+-        val category = Regex("categoryName:\\s*([^\\s]+)").find(raw)?.groupValues?.getOrNull(1).orEmpty()
+-        return ThermalPolicy(raw = raw, category = category, chargeVal = charge, speedChargeAdd = speed)
++        return ThermalPolicy(
++            raw = raw,
++            category = CATEGORY_PATTERN.find(raw)?.groupValues?.getOrNull(1).orEmpty(),
++            chargeVal = CHARGE_VAL_PATTERN.find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull(),
++            speedChargeAdd = SPEED_CHARGE_PATTERN.find(raw)?.groupValues?.getOrNull(1)?.toIntOrNull(),
++        )
+     }
+ 
+     private fun readThermalStatus(): ThermalStatus =
+         GearCalculator.parseThermalStatus(shizuku.readThermalStatus())
+ 
+     private companion object {
++        val CHARGE_VAL_PATTERN = Regex("chargeVal:\\s*(-?\\d+)")
++        val SPEED_CHARGE_PATTERN = Regex("speedChargeAdd:\\s*(-?\\d+)")
++        val CATEGORY_PATTERN = Regex("categoryName:\\s*([^\\s]+)")
+         const val TEMPERATURE_PAUSE_CANDIDATE = -1
+         const val POLICY_DIAGNOSTIC_CACHE_MILLIS = 3_000L
+         const val LEVEL_ZERO_POLL_MILLIS = 3_000L
+diff --git a/app/src/main/java/com/oppower/controller/GearCalculator.kt b/app/src/main/java/com/oppower/controller/GearCalculator.kt
+index b40bd27..30e513a 100644
+--- a/app/src/main/java/com/oppower/controller/GearCalculator.kt
++++ b/app/src/main/java/com/oppower/controller/GearCalculator.kt
+@@ -24,20 +24,24 @@ data class ResolvedGear(
+ object GearCalculator {
+     const val COSA_MIN = -10
+     const val COSA_MAX = 9
++    private val THERMAL_LEVELS_PATTERN = Regex("Thermal Levels = \\[([^]]*)]")
++    private val THERMAL_STATUS_PATTERN = Regex("Thermal status = (-?\\d+)")
++    private val THERMAL_TEMPERATURE_PATTERN = Regex("Thermal Temperature = (-?\\d+(?:\\.\\d+)?)")
++
+     fun parseThermalStatus(raw: String): ThermalStatus {
+-        val levels = Regex("Thermal Levels = \\[([^]]*)]")
++        val levels = THERMAL_LEVELS_PATTERN
+             .find(raw)
+             ?.groupValues
+             ?.getOrNull(1)
+             ?.split(',')
+             ?.mapNotNull { it.trim().toIntOrNull() }
+             .orEmpty()
+-        val status = Regex("Thermal status = (-?\\d+)")
++        val status = THERMAL_STATUS_PATTERN
+             .find(raw)
+             ?.groupValues
+             ?.getOrNull(1)
+             ?.toIntOrNull()
+-        val temperature = Regex("Thermal Temperature = (-?\\d+(?:\\.\\d+)?)")
++        val temperature = THERMAL_TEMPERATURE_PATTERN
+             .find(raw)
+             ?.groupValues
+             ?.getOrNull(1)
+diff --git a/app/src/main/java/com/oppower/data/PreferencesStore.kt b/app/src/main/java/com/oppower/data/PreferencesStore.kt
+index d82a094..8e7ffdc 100644
+--- a/app/src/main/java/com/oppower/data/PreferencesStore.kt
++++ b/app/src/main/java/com/oppower/data/PreferencesStore.kt
+@@ -7,8 +7,10 @@ import com.oppower.model.RuntimeSettings
+ import com.oppower.model.TierRule
+ import com.oppower.model.SocTierRule
+ import com.oppower.model.ControlTier
++import com.oppower.model.NotificationStyle
+ import com.oppower.model.ThemeMode
+ import com.oppower.model.ThemePalette
++import com.oppower.model.UiDensity
+ 
+ class PreferencesStore(context: Context) {
+     private val prefs = context.getSharedPreferences("oppower", Context.MODE_PRIVATE)
+@@ -78,6 +80,16 @@ class PreferencesStore(context: Context) {
+             absoluteCurrentPowerDisplay = prefs.getBoolean("absolute_current_power", false),
+             debugMode = prefs.getBoolean("debug_mode", false),
+             overlayKeepAliveEnabled = prefs.getBoolean("overlay_keep_alive", false),
++            chargeDetectEnabled = prefs.getBoolean("charge_detect", true),
++            detectionIntervalSeconds = prefs.getInt("detect_interval", 10).coerceIn(3, 60),
++            anomalyAlertEnabled = prefs.getBoolean("anomaly_alert", true),
++            fullChargeAlertEnabled = prefs.getBoolean("full_charge_alert", false),
++            showBatteryHealth = prefs.getBoolean("show_battery_health", true),
++            notificationStyle = enumValue(
++                prefs.getString("notification_style", null),
++                NotificationStyle.STANDARD,
++            ),
++            uiDensity = enumValue(prefs.getString("ui_density", null), UiDensity.COMFORTABLE),
+         )
+     }
+ 
+@@ -130,6 +142,13 @@ class PreferencesStore(context: Context) {
+             .putBoolean("absolute_current_power", settings.absoluteCurrentPowerDisplay)
+             .putBoolean("debug_mode", settings.debugMode)
+             .putBoolean("overlay_keep_alive", settings.overlayKeepAliveEnabled)
++            .putBoolean("charge_detect", settings.chargeDetectEnabled)
++            .putInt("detect_interval", settings.detectionIntervalSeconds)
++            .putBoolean("anomaly_alert", settings.anomalyAlertEnabled)
++            .putBoolean("full_charge_alert", settings.fullChargeAlertEnabled)
++            .putBoolean("show_battery_health", settings.showBatteryHealth)
++            .putString("notification_style", settings.notificationStyle.name)
++            .putString("ui_density", settings.uiDensity.name)
+             .apply()
+     }
+ 
+@@ -139,6 +158,13 @@ class PreferencesStore(context: Context) {
+         prefs.edit().putBoolean("intro_seen", true).apply()
+     }
+ 
++    /** 恢复默认值，但保留首次启动说明的已读标记，避免重置后再弹一次。 */
++    fun resetAll() {
++        val introSeen = introSeen()
++        prefs.edit().clear().apply()
++        if (introSeen) prefs.edit().putBoolean("intro_seen", true).apply()
++    }
++
+     private fun controlTier(value: String?): ControlTier = runCatching {
+         ControlTier.valueOf(value.orEmpty())
+     }.getOrDefault(ControlTier.PAUSED)
+diff --git a/app/src/main/java/com/oppower/history/ChartHistoryStore.kt b/app/src/main/java/com/oppower/history/ChartHistoryStore.kt
+index 0680fa8..2595fbd 100644
+--- a/app/src/main/java/com/oppower/history/ChartHistoryStore.kt
++++ b/app/src/main/java/com/oppower/history/ChartHistoryStore.kt
+@@ -111,6 +111,43 @@ class ChartHistoryStore(context: Context) {
+         point
+     }
+ 
++    /**
++     * 导出最近 24 小时原始采样为 CSV。写入调用方给定的文件，返回导出行数。
++     * 使用与页面相同的列顺序，便于直接用表格软件打开。
++     */
++    fun exportCsv(target: File, nowMillis: Long = System.currentTimeMillis()): Int = synchronized(LOCK) {
++        val cutoff = (nowMillis - RETENTION_MILLIS).coerceAtLeast(0L)
++        val points = readSince(cutoff)
++        target.parentFile?.mkdirs()
++        val clock = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
++        target.bufferedWriter().use { writer ->
++            writer.write("epoch_ms,time,power_w,temperature_c,soc,ac_online,current_ma,voltage_mv")
++            writer.write("\n")
++            points.forEach { point ->
++                val line = buildString {
++                    append(point.epochMillis)
++                    append(',')
++                    append(clock.format(java.util.Date(point.epochMillis)))
++                    append(',')
++                    append(point.powerW)
++                    append(',')
++                    append(point.temperatureC)
++                    append(',')
++                    append(point.levelPercent)
++                    append(',')
++                    append(if (point.acOnline) 1 else 0)
++                    append(',')
++                    append(point.currentMa)
++                    append(',')
++                    append(point.voltageMv)
++                    append('\n')
++                }
++                writer.write(line)
++            }
++        }
++        points.size
++    }
++
+     fun clear() = synchronized(LOCK) {
+         database.writableDatabase.delete(HistoryDatabase.TABLE, null, null)
+         File(appContext.filesDir, LEGACY_FILE_NAME).delete()
+diff --git a/app/src/main/java/com/oppower/model/Models.kt b/app/src/main/java/com/oppower/model/Models.kt
+index 26e6615..dbf111b 100644
+--- a/app/src/main/java/com/oppower/model/Models.kt
++++ b/app/src/main/java/com/oppower/model/Models.kt
+@@ -85,6 +85,17 @@ enum class ThemeMode(val label: String) {
+     DARK("深色"),
+ }
+ 
++enum class UiDensity(val label: String) {
++    COMFORTABLE("舒适"),
++    COMPACT("紧凑"),
++}
++
++enum class NotificationStyle(val label: String) {
++    COMPACT("精简"),
++    STANDARD("标准"),
++    DETAIL("详细"),
++}
++
+ enum class ThemePalette(val label: String) {
+     TEAL("青绿"),
+     OCEAN("海湾蓝"),
+@@ -170,6 +181,13 @@ data class RuntimeSettings(
+     val absoluteCurrentPowerDisplay: Boolean = false,
+     val debugMode: Boolean = false,
+     val overlayKeepAliveEnabled: Boolean = false,
++    val chargeDetectEnabled: Boolean = true,
++    val detectionIntervalSeconds: Int = 10,
++    val anomalyAlertEnabled: Boolean = true,
++    val fullChargeAlertEnabled: Boolean = false,
++    val showBatteryHealth: Boolean = true,
++    val notificationStyle: NotificationStyle = NotificationStyle.STANDARD,
++    val uiDensity: UiDensity = UiDensity.COMFORTABLE,
+ )
+ 
+ enum class ControllerPhase {
+diff --git a/app/src/main/java/com/oppower/service/ChargeControlBus.kt b/app/src/main/java/com/oppower/service/ChargeControlBus.kt
+index 5147149..0bb7dc7 100644
+--- a/app/src/main/java/com/oppower/service/ChargeControlBus.kt
++++ b/app/src/main/java/com/oppower/service/ChargeControlBus.kt
+@@ -1,5 +1,6 @@
+ package com.oppower.service
+ 
++import com.oppower.battery.ChargeInsight
+ import com.oppower.model.BatterySnapshot
+ import com.oppower.model.ControllerStatus
+ import kotlinx.coroutines.channels.Channel
+@@ -13,6 +14,17 @@ data class SharedBatterySample(
+ object ChargeControlBus {
+     val status = MutableStateFlow(ControllerStatus())
+     val battery = MutableStateFlow<SharedBatterySample?>(null)
++
++    /** 充电检测结论；页面可见时由 ViewModel 产出，息屏后由服务接管。 */
++    val insight = MutableStateFlow(ChargeInsight())
++
++    /**
++     * 页面是否在前台。前台时由 ViewModel 负责读取 power_supply，服务不再重复查询，
++     * 避免同一次检测被两处各做一遍。
++     */
++    @Volatile
++    var pageVisible: Boolean = false
++
+     val wakeRequests = Channel<Unit>(Channel.CONFLATED)
+ 
+     fun requestUpdate() {
+diff --git a/app/src/main/java/com/oppower/service/ChargeControlService.kt b/app/src/main/java/com/oppower/service/ChargeControlService.kt
+index 49e78f6..51e6821 100644
+--- a/app/src/main/java/com/oppower/service/ChargeControlService.kt
++++ b/app/src/main/java/com/oppower/service/ChargeControlService.kt
+@@ -22,6 +22,9 @@ import androidx.annotation.RequiresApi
+ import com.oppower.MainActivity
+ import com.oppower.R
+ import com.oppower.battery.BatteryReader
++import com.oppower.battery.ChargeInsight
++import com.oppower.battery.ChargeInspector
++import com.oppower.battery.ChargeStage
+ import com.oppower.controller.ChargingController
+ import com.oppower.data.PreferencesStore
+ import com.oppower.history.ChartHistoryBus
+@@ -46,6 +49,7 @@ import kotlin.math.roundToInt
+ internal object StatusNotificationChannels {
+     const val STATUS = "charge_control"
+     const val LIVE = "battery_live_update_v2"
++    const val ALERT = "charge_alert"
+ }
+ 
+ class ChargeControlService : Service() {
+@@ -66,6 +70,14 @@ class ChargeControlService : Service() {
+     private var lastNotificationTitle = ""
+     private var lastNotificationAt = 0L
+     private var lastOverlayEnabled: Boolean? = null
++    private var insight: ChargeInsight = ChargeInsight()
++    private var lastDetectionAt = 0L
++    private var supplyDump: String? = null
++    private var pluggedAtElapsed: Long? = null
++    private var lastAnomalySignature = ""
++    private var fullAlerted = false
++    private val detectPowerWindow = ArrayDeque<Float>()
++    private val detectLevelWindow = ArrayDeque<Pair<Long, Int>>()
+     @Volatile private var controlLoopStarted = false
+     @Volatile private var pendingImmediateAction: String? = null
+ 
+@@ -119,6 +131,7 @@ class ChargeControlService : Service() {
+                     val immediateAction = pendingImmediateAction
+                     if (immediateAction != null) pendingImmediateAction = null
+                     var keepRunning = true
++                    var idleBackoff = false
+                     try {
+                         val settings = cachedSettings
+                         val battery = batteryReader.snapshot(settings)
+@@ -137,7 +150,7 @@ class ChargeControlService : Service() {
+                             overlayScope.launch { overlay.sync(settings.overlayKeepAliveEnabled) }
+                         }
+                         syncStatusNotification(status, battery, settings, force = immediateAction != null)
+-                        if (settings.historyEnabled) {
++                        if (shouldRecordHistory(settings)) {
+                             runCatching {
+                                 historyStore.record(battery, screenOn = screenOn)
+                                     ?.let(ChartHistoryBus::append)
+@@ -145,6 +158,7 @@ class ChargeControlService : Service() {
+                                 android.util.Log.w("OPPower", "History sample failed", it)
+                             }
+                         }
++                        maybeRunDetection(settings, battery)
+                         if (immediateAction != null) {
+                             android.util.Log.i(
+                                 "OPPower",
+@@ -153,24 +167,25 @@ class ChargeControlService : Service() {
+                                     "cosa=${status.appliedCosa}",
+                             )
+                         }
+-                        // If Level 0 is still active after the last save point,
+-                        // keep retrying the safe native restore instead of
+-                        // stopping the only process that can perform it.
++                        // Keep a failed native safety restore alive only while the
++                        // display is interactive. Every Shizuku command is a Binder
++                        // round trip plus a dumpsys call; retrying a missing charging
++                        // service behind a dark screen would wake the SoC once per
++                        // second all night. The loop re-checks after screen-on and
++                        // notices still request an immediate update.
+                         val retryingSafetyRestore =
+-                            status.phase == ControllerPhase.ERROR && status.levelZeroMode
++                            status.phase == ControllerPhase.ERROR &&
++                                status.levelZeroMode &&
++                                screenOn
+                         if (!battery.acOnline && !retryingSafetyRestore) {
+                             if (foregroundStarted) stopForeground(STOP_FOREGROUND_REMOVE)
+                             stopSelf()
+                             keepRunning = false
+                         } else if (
+-                            !settings.masterEnabled &&
+-                            !settings.nativeLevelZeroEnabled &&
+-                            !settings.liveNotificationEnabled &&
++                            !hasActiveControlTarget(settings) &&
+                             !retryingSafetyRestore
+                         ) {
+-                            if (foregroundStarted) stopForeground(STOP_FOREGROUND_REMOVE)
+-                            stopSelf()
+-                            keepRunning = false
++                            idleBackoff = true
+                         }
+                     } catch (cancelled: CancellationException) {
+                         throw cancelled
+@@ -182,8 +197,14 @@ class ChargeControlService : Service() {
+                     if (!keepRunning) break
+                     // The notification obeys its configured cadence. Chart history is
+                     // throttled by ChartHistoryStore to LLPower's sampling intervals.
+-                    val remaining = (CONTROL_CYCLE_MILLIS -
+-                        (SystemClock.elapsedRealtime() - cycleStartedAt)).coerceAtLeast(0L)
++                    // When no control feature is enabled the one-second cadence only
++                    // burns wakeups, so the loop idles until a settings change arrives.
++                    val remaining = if (idleBackoff) {
++                        CONTROL_CYCLE_MILLIS
++                    } else {
++                        (CONTROL_CYCLE_MILLIS -
++                            (SystemClock.elapsedRealtime() - cycleStartedAt)).coerceAtLeast(0L)
++                    }
+                     if (remaining > 0L) {
+                         withTimeoutOrNull(remaining) { ChargeControlBus.wakeRequests.receive() }
+                     }
+@@ -248,18 +269,20 @@ class ChargeControlService : Service() {
+                 ChargeControlBus.status.value = status
+                 val settings = cachedSettings
+                 val battery = batteryReader.snapshot(settings)
+-                syncStatusNotification(
+-                    status,
+-                    battery,
+-                    settings,
+-                    force = true,
+-                )
+                 if (status.phase == ControllerPhase.ERROR && status.levelZeroMode) {
+                     // A failed native safety restore must keep a local retry path
+                     // even when both the master switch and live notification are off.
++                    // The retry loop owns the notification from here on.
+                     startControlLoop()
+                     ChargeControlBus.requestUpdate()
++                    return@launch
+                 }
++                syncStatusNotification(
++                    status,
++                    battery,
++                    settings,
++                    force = true,
++                )
+             }
+         }
+         if (action == ACTION_HISTORY_SETTING_CHANGED) {
+@@ -283,7 +306,17 @@ class ChargeControlService : Service() {
+                 "All controls disabled; safety restore phase=${status.phase}",
+             )
+             if (status.phase == ControllerPhase.ERROR && status.levelZeroMode) {
+-                // Keep the local retry path alive until the safe level is confirmed.
++                // This path is reached with the service still running but no
++                // foreground notification: keep serving the retry until the safe
++                // level is confirmed, otherwise stopSelf() would hand control to
++                // a START_NOT_STICKY restart that exits immediately.
++                if (!foregroundStarted) {
++                    startForeground(
++                        NOTIFICATION_ID,
++                        notification("—", "正在恢复系统默认", status.message, batteryReader.snapshot(cachedSettings), cachedSettings),
++                    )
++                    foregroundStarted = true
++                }
+                 startControlLoop()
+                 ChargeControlBus.requestUpdate()
+                 return@launch
+@@ -318,6 +351,91 @@ class ChargeControlService : Service() {
+ 
+     override fun onBind(intent: Intent?): IBinder? = null
+ 
++    /**
++     * 息屏后的充电检测。页面在前台时由 ViewModel 负责，这里直接跳过，避免同一份
++     * `power_supply` 被读两遍。检测结论只用于展示与提醒，不参与控制决策。
++     */
++    private fun maybeRunDetection(settings: RuntimeSettings, battery: BatterySnapshot) {
++        val nowElapsed = SystemClock.elapsedRealtime()
++        if (!battery.acOnline) {
++            pluggedAtElapsed = null
++            detectPowerWindow.clear()
++            detectLevelWindow.clear()
++            lastAnomalySignature = ""
++            fullAlerted = false
++            lastDetectionAt = 0L
++            return
++        }
++        if (pluggedAtElapsed == null) pluggedAtElapsed = nowElapsed
++        if (!settings.chargeDetectEnabled || ChargeControlBus.pageVisible) return
++        val interval = settings.detectionIntervalSeconds.coerceIn(3, 60) * 1_000L
++        if (lastDetectionAt != 0L && nowElapsed - lastDetectionAt < interval) return
++        lastDetectionAt = nowElapsed
++
++        detectPowerWindow.addLast(battery.powerW)
++        while (detectPowerWindow.size > 30) detectPowerWindow.removeFirst()
++        val nowWall = System.currentTimeMillis()
++        detectLevelWindow.addLast(nowWall to battery.levelPercent)
++        while (detectLevelWindow.size > 40) detectLevelWindow.removeFirst()
++        shizuku.readPowerSupplyDump()?.let { supplyDump = it }
++
++        val session = ChargeControlBus.insight.value
++        val computed = ChargeInspector.analyze(
++            dump = supplyDump.orEmpty(),
++            acOnline = true,
++            levelPercent = battery.levelPercent,
++            currentMa = battery.currentMa,
++            voltageMv = battery.voltageMv,
++            powerW = battery.powerW,
++            batteryTempC = battery.temperatureC,
++            batteryStatus = battery.status,
++            pluggedForMillis = pluggedAtElapsed?.let { nowElapsed - it },
++            recentPower = detectPowerWindow.toList(),
++            recentLevels = detectLevelWindow.toList(),
++            doubleCell = settings.doubleCellCorrection,
++            sessionChargeMah = session.chargeMahThisSession,
++            sessionAveragePowerW = session.inputPowerW.takeIf { it > 1f },
++        )
++        insight = computed
++        ChargeControlBus.insight.value = computed
++
++        val signature = computed.anomalies.joinToString("|")
++        if (settings.anomalyAlertEnabled && signature.isNotEmpty() && signature != lastAnomalySignature) {
++            postAlert("充电状态异常", computed.anomalies.first(), settings)
++        }
++        lastAnomalySignature = signature
++
++        if (settings.fullChargeAlertEnabled && battery.levelPercent >= 100 && !fullAlerted) {
++            fullAlerted = true
++            postAlert("电池已充满", "建议拔掉充电器，减少满电静置时间", settings)
++        }
++    }
++
++    /** 提醒通知独立通道与独立 ID，滑动即可清除，不会覆盖常驻状态通知。 */
++    private fun postAlert(title: String, body: String, settings: RuntimeSettings) {
++        runCatching {
++            val manager = getSystemService(NotificationManager::class.java)
++            val intent = packageManager.getLaunchIntentForPackage(packageName)
++                ?: Intent(this, MainActivity::class.java)
++            val pending = PendingIntent.getActivity(
++                this,
++                10,
++                intent,
++                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
++            )
++            val notification = Notification.Builder(this, StatusNotificationChannels.ALERT)
++                .setSmallIcon(R.drawable.ic_notification_power)
++                .setContentTitle(title)
++                .setContentText(body)
++                .setContentIntent(pending)
++                .setAutoCancel(true)
++                .setCategory(Notification.CATEGORY_REMINDER)
++                .setOnlyAlertOnce(true)
++                .build()
++            manager.notify(ALERT_NOTIFICATION_ID, notification)
++        }.onFailure { android.util.Log.w("OPPower", "Alert notification failed", it) }
++    }
++
+     private fun syncStatusNotification(
+         status: ControllerStatus,
+         battery: BatterySnapshot,
+@@ -325,29 +443,11 @@ class ChargeControlService : Service() {
+         force: Boolean = false,
+     ) {
+         if (!force && notificationDismissed) return
+-        val controlEnabled = settings.masterEnabled || settings.nativeLevelZeroEnabled
+-        if (!controlEnabled || !battery.acOnline) {
+-            if (settings.liveNotificationEnabled && battery.acOnline) {
+-                val power = notificationPower(battery, settings)
+-                val data = notificationBatteryData(battery, settings)
+-                val tier = if (status.phase == ControllerPhase.ERROR) {
+-                    status.message.ifBlank { "恢复系统默认失败" }
+-                } else {
+-                    "充电增强未启用"
+-                }
+-                val notification = notification(power, data, tier, battery, settings)
+-                if (!foregroundStarted) {
+-                    startForeground(NOTIFICATION_ID, notification)
+-                    foregroundStarted = true
+-                } else {
+-                    getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
+-                }
+-                lastNotificationText = "$data\n$tier"
+-                lastNotificationTitle = power
+-                lastNotificationAt = System.currentTimeMillis()
+-                return
+-            }
+-            getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
++        // Only a foreground service may post this notification. When neither
++        // charging control is enabled there is nothing to show; noticing that
++        // must not tear down the notification without clearing the foreground
++        // state, or the next startForeground() call would crash.
++        if (!hasActiveControlTarget(settings)) {
+             if (foregroundStarted) {
+                 stopForeground(STOP_FOREGROUND_REMOVE)
+                 foregroundStarted = false
+@@ -409,6 +509,9 @@ class ChargeControlService : Service() {
+         battery: BatterySnapshot,
+         settings: RuntimeSettings,
+     ): String {
++        if (settings.notificationStyle == com.oppower.model.NotificationStyle.COMPACT) {
++            return "${battery.levelPercent}%"
++        }
+         val values = buildList {
+             if (settings.notificationShowBatteryPercent) add("${battery.levelPercent}%")
+             if (settings.notificationShowVoltage && battery.sampleValid) {
+@@ -419,7 +522,15 @@ class ChargeControlService : Service() {
+             }
+             if (settings.notificationShowTemperature) add("${battery.temperatureC.oneDecimal()}°C")
+         }
+-        return values.joinToString("  ·  ")
++        val text = values.joinToString("  ·  ")
++        return if (settings.notificationStyle == com.oppower.model.NotificationStyle.DETAIL) {
++            listOf(text, insight.stage.label, insight.capability?.protocolLabel)
++                .filterNotNull()
++                .filter { it.isNotBlank() }
++                .joinToString("  ·  ")
++        } else {
++            text
++        }
+     }
+ 
+     private fun notification(
+@@ -515,6 +626,18 @@ class ChargeControlService : Service() {
+                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+             },
+         )
++        manager.createNotificationChannel(
++            NotificationChannel(
++                StatusNotificationChannels.ALERT,
++                "充电提醒",
++                NotificationManager.IMPORTANCE_DEFAULT,
++            ).apply {
++                description = "充电异常与充满提醒，可单独关闭"
++                setShowBadge(true)
++                enableVibration(false)
++                setSound(null, null)
++            },
++        )
+         if (Build.VERSION.SDK_INT >= 36) {
+             manager.createNotificationChannel(
+                 NotificationChannel(
+@@ -546,6 +669,7 @@ class ChargeControlService : Service() {
+ 
+     companion object {
+         const val NOTIFICATION_ID = 2108
++        const val ALERT_NOTIFICATION_ID = 2109
+         const val ACTION_RESTORE_ALL = "com.oppower.action.RESTORE_ALL"
+         const val ACTION_HISTORY_SETTING_CHANGED = "com.oppower.action.HISTORY_SETTING_CHANGED"
+         const val ACTION_RESUME_NOTIFICATION = "com.oppower.action.RESUME_NOTIFICATION"
+@@ -660,3 +784,17 @@ class NotificationDismissReceiver : BroadcastReceiver() {
+         ChargeControlService.markNotificationDismissed()
+     }
+ }
++
++/**
++ * While charging control is enabled the notification reflects the live control
++ * state, so a foreground service may always show it. The optional notification
++ * is only offered when no charging control is enabled.
++ */
++internal fun hasActiveControlTarget(settings: RuntimeSettings): Boolean =
++    settings.masterEnabled ||
++        settings.nativeLevelZeroEnabled ||
++        settings.liveNotificationEnabled
++
++/** The persisted history switch only counts while a charging session is active. */
++internal fun shouldRecordHistory(settings: RuntimeSettings): Boolean =
++    settings.historyEnabled && hasActiveControlTarget(settings)
+diff --git a/app/src/main/java/com/oppower/shizuku/PrivilegedCommandService.kt b/app/src/main/java/com/oppower/shizuku/PrivilegedCommandService.kt
+index 21688ad..a217169 100644
+--- a/app/src/main/java/com/oppower/shizuku/PrivilegedCommandService.kt
++++ b/app/src/main/java/com/oppower/shizuku/PrivilegedCommandService.kt
+@@ -95,6 +95,35 @@ class PrivilegedCommandService @Keep constructor() : IPrivilegedCommandService.S
+         return null
+     }
+ 
++    /**
++     * 充电检测所需的多节点快照。只读 `power_supply` 下已确认存在的节点，
++     * 单文件读取失败只跳过该字段，不新增任何 shell 命令面。
++     */
++    @Throws(RemoteException::class)
++    override fun readPowerSupplyDump(): String = runCatching {
++        buildString {
++            POWER_SUPPLY_DIRS.forEach { name ->
++                val dir = File(POWER_SUPPLY_ROOT, name)
++                if (!dir.isDirectory) return@forEach
++                val values = buildMap {
++                    POWER_SUPPLY_FIELDS.forEach { field ->
++                        runCatching {
++                            File(dir, field)
++                                .takeIf { it.isFile && it.canRead() }
++                                ?.readText()
++                                ?.trim()
++                        }.getOrNull()
++                            ?.takeIf { it.isNotEmpty() && it.length <= MAX_FIELD_LENGTH }
++                            ?.let { put(field, it) }
++                    }
++                }
++                if (values.isEmpty()) return@forEach
++                append("[dir] ").append(name).append('\n')
++                values.forEach { (field, value) -> append(field).append('=').append(value).append('\n') }
++            }
++        }
++    }.getOrElse { error -> throw RemoteException("OPPower power supply dump failed: ${error.message.orEmpty()}") }
++
+     @Throws(RemoteException::class)
+     override fun execute(command: String): String {
+         if (!AllowedCommands.matches(command)) {
+@@ -126,6 +155,38 @@ class PrivilegedCommandService @Keep constructor() : IPrivilegedCommandService.S
+         return output
+     }
+     private companion object {
++        const val POWER_SUPPLY_ROOT = "/sys/class/power_supply"
++        const val MAX_FIELD_LENGTH = 64
++        val POWER_SUPPLY_DIRS = listOf(
++            "battery",
++            "usb",
++            "main",
++            "charger",
++            "pc_port",
++            "wired",
++            "wireless",
++            "otg",
++        )
++        val POWER_SUPPLY_FIELDS = listOf(
++            "type",
++            "online",
++            "status",
++            "health",
++            "voltage_now",
++            "voltage_max",
++            "current_now",
++            "current_max",
++            "input_current_limit",
++            "constant_charge_current_max",
++            "charge_full",
++            "charge_full_design",
++            "capacity",
++            "temp",
++            "cycle_count",
++            "usb_type",
++            "real_type",
++            "scope",
++        )
+         const val BATTERY_DUMP_COMMAND = "dumpsys battery"
+         const val FORCED_CURRENT_COMMAND = "cmd battery get -f current_now"
+         const val BATTERY_DUMP_TIMEOUT_MILLIS = 1_500L
+diff --git a/app/src/main/java/com/oppower/shizuku/ShizukuGateway.kt b/app/src/main/java/com/oppower/shizuku/ShizukuGateway.kt
+index 7bc3767..e516c8f 100644
+--- a/app/src/main/java/com/oppower/shizuku/ShizukuGateway.kt
++++ b/app/src/main/java/com/oppower/shizuku/ShizukuGateway.kt
+@@ -168,6 +168,15 @@ class ShizukuGateway(context: Context) : ChargingGateway {
+         )
+     }.getOrNull()
+ 
++    /**
++     * 充电检测用的只读快照。调用方应把它当作“每隔几秒一次的额外查询”，不要放进
++     * 1 秒控制循环，避免为展示信息增加 Shizuku 往返。
++     */
++    fun readPowerSupplyDump(): String? = runCatching {
++        if (!isAvailable || !hasPermission) return@runCatching null
++        awaitService(COMMAND_TIMEOUT_MILLIS).readPowerSupplyDump().takeIf { it.isNotBlank() }
++    }.getOrNull()
++
+     /**
+      * ThermalControlUtils observes both settings. A float-window change calls
+      * j2(null, 0ms), which requests an immediate policy recomputation. The
+@@ -212,6 +221,33 @@ class ShizukuGateway(context: Context) : ChargingGateway {
+         return this
+     }
+ 
++    /**
++     * Binds as soon as the service becomes usable. Binding only on the first
++     * Shizuku command meant that a granted permission or a restarted Shizuku
++     * binder left the gateway without a connection until the next cycle's
++     * probe; this listener simply re-arms it, including after a debugger
++     * restart. The service is bounded to this package, so no exported
++     * component is exposed.
++     */
++    init {
++        runCatching {
++            Shizuku.addBinderReceivedListenerSticky(binderReceivedListener)
++            Shizuku.addBinderDeadListener(binderDeadListener)
++        }
++    }
++
++    private val binderReceivedListener = Shizuku.OnBinderReceivedListener {
++        bind()
++    }
++
++    private val binderDeadListener = Shizuku.OnBinderDeadListener {
++        synchronized(bindLock) {
++            commandService = null
++            binding = false
++            connectedLatch = null
++        }
++    }
++
+     companion object {
+         const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
+         private const val COMMAND_TIMEOUT_MILLIS = 4_000L
+diff --git a/app/src/main/java/com/oppower/ui/GeneralSettingsPage.kt b/app/src/main/java/com/oppower/ui/GeneralSettingsPage.kt
+index 7fb2ead..d278b6a 100644
+--- a/app/src/main/java/com/oppower/ui/GeneralSettingsPage.kt
++++ b/app/src/main/java/com/oppower/ui/GeneralSettingsPage.kt
+@@ -5,13 +5,15 @@ import android.content.Intent
+ import android.net.Uri
+ import android.os.Build
+ import android.provider.Settings
+-import androidx.compose.foundation.BorderStroke
+-import androidx.compose.foundation.background
++import androidx.compose.animation.AnimatedVisibility
++import androidx.compose.animation.core.spring
++import androidx.compose.animation.expandVertically
++import androidx.compose.animation.fadeIn
++import androidx.compose.animation.fadeOut
++import androidx.compose.animation.shrinkVertically
+ import androidx.compose.foundation.clickable
+ import androidx.compose.foundation.layout.Arrangement
+-import androidx.compose.foundation.layout.Box
+ import androidx.compose.foundation.layout.Column
+-import androidx.compose.foundation.layout.WindowInsets
+ import androidx.compose.foundation.layout.ColumnScope
+ import androidx.compose.foundation.layout.Row
+ import androidx.compose.foundation.layout.Spacer
+@@ -19,38 +21,32 @@ import androidx.compose.foundation.layout.fillMaxSize
+ import androidx.compose.foundation.layout.fillMaxWidth
+ import androidx.compose.foundation.layout.height
+ import androidx.compose.foundation.layout.padding
+-import androidx.compose.foundation.layout.safeDrawing
+-import androidx.compose.foundation.layout.size
+-import androidx.compose.foundation.layout.windowInsetsPadding
+ import androidx.compose.foundation.rememberScrollState
+-import androidx.compose.foundation.shape.CircleShape
+ import androidx.compose.foundation.shape.RoundedCornerShape
+ import androidx.compose.foundation.verticalScroll
+ import androidx.compose.material3.AlertDialog
+-import androidx.compose.material3.HorizontalDivider
+ import androidx.compose.material3.Slider
+-import androidx.compose.material3.Surface
+-import androidx.compose.material3.Switch
+ import androidx.compose.material3.Text
+ import androidx.compose.material3.TextButton
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.getValue
+-import androidx.compose.runtime.mutableIntStateOf
+ import androidx.compose.runtime.mutableStateOf
+ import androidx.compose.runtime.remember
++import androidx.compose.runtime.saveable.rememberSaveable
+ import androidx.compose.runtime.setValue
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+-import androidx.compose.ui.graphics.Color
+-import androidx.compose.ui.graphics.Brush
+ import androidx.compose.ui.platform.LocalContext
+ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
+ import com.oppower.BuildConfig
++import com.oppower.battery.ChargeStage
++import com.oppower.model.NotificationStyle
+ import com.oppower.model.RuntimeSettings
+ import com.oppower.model.ThemeMode
+ import com.oppower.model.ThemePalette
++import com.oppower.model.UiDensity
+ import java.util.Locale
+ import kotlin.math.roundToInt
+ 
+@@ -58,6 +54,7 @@ internal enum class SettingsScreen {
+     HOME,
+     APPEARANCE,
+     NOTIFICATIONS,
++    CHARGE_DETECT,
+     STABLE_OPERATION,
+     ADVANCED_KEEP_ALIVE,
+     HARDWARE,
+@@ -80,6 +77,8 @@ internal fun SettingsRouter(
+     onJoinQq: () -> Unit,
+     onClearHistory: () -> Unit,
+     onRequestShizuku: () -> Unit,
++    onExportHistory: () -> Unit,
++    onResetSettings: () -> Unit,
+ ) {
+     when (screen) {
+         SettingsScreen.HOME -> SettingsHomePage(
+@@ -91,11 +90,19 @@ internal fun SettingsRouter(
+         )
+         SettingsScreen.APPEARANCE -> AppearanceSettingsPage(state, onBack, onSettingsChange)
+         SettingsScreen.NOTIFICATIONS -> NotificationSettingsPage(state, onBack, onSettingsChange)
++        SettingsScreen.CHARGE_DETECT -> ChargeDetectSettingsPage(state, onBack, onSettingsChange)
+         SettingsScreen.STABLE_OPERATION -> StableOperationPage(state, onBack, onNavigate)
+         SettingsScreen.ADVANCED_KEEP_ALIVE -> AdvancedKeepAlivePage(state, onBack, onSettingsChange)
+         SettingsScreen.HARDWARE -> HardwareSettingsPage(state, onBack, onSettingsChange)
+         SettingsScreen.SYSTEM -> SystemSettingsPage(state, onBack, onSettingsChange, onRequestShizuku)
+-        SettingsScreen.DATA -> DataManagementPage(state, onBack, onSettingsChange, onClearHistory)
++        SettingsScreen.DATA -> DataManagementPage(
++            state = state,
++            onBack = onBack,
++            onSettingsChange = onSettingsChange,
++            onClearHistory = onClearHistory,
++            onExportHistory = onExportHistory,
++            onResetSettings = onResetSettings,
++        )
+         SettingsScreen.FAQ -> FaqPage(onBack)
+         SettingsScreen.ABOUT -> AboutPage(onBack, onNavigate, onJoinQq)
+         SettingsScreen.IMPORTANT_NOTICE -> NoticePage(
+@@ -120,6 +127,13 @@ internal fun SettingsRouter(
+     }
+ }
+ 
++private data class SettingsEntry(
++    val title: String,
++    val summary: String,
++    val screen: SettingsScreen,
++    val keywords: String = "",
++)
++
+ @Composable
+ private fun SettingsHomePage(
+     state: UiState,
+@@ -128,113 +142,117 @@ private fun SettingsHomePage(
+     onJoinQq: () -> Unit,
+     onRequestShizuku: () -> Unit,
+ ) {
++    var query by rememberSaveable { mutableStateOf("") }
+     val stableReady = state.systemAccess.notificationsReady(usesLiveNotificationChannel()) &&
+         state.systemAccess.batteryUnrestricted
+-    SettingsPage(
+-        title = "设置",
+-        subtitle = "OPPower · 外观、通知、系统与数据",
+-        onBack = onBack,
+-    ) {
+-        SettingsSection("常用") {
+-            SettingsMenuRow(
+-                icon = "S",
+-                title = "Shizuku 授权",
+-                summary = shizukuStatus(state),
+-                accent = !state.shizukuPermission,
+-                onClick = onRequestShizuku,
+-            )
+-            SettingsDivider()
+-            SettingsMenuRow(
+-                icon = "◐",
+-                title = "外观设置",
+-                summary = "${state.settings.themeMode.label} · ${state.settings.themePalette.label} · ${fontSizeLabel(state.settings.fontScale)}",
+-                onClick = { onNavigate(SettingsScreen.APPEARANCE) },
+-            )
+-            SettingsDivider()
+-            SettingsMenuRow(
+-                icon = "◎",
+-                title = "稳定运行",
+-                summary = if (stableReady) "后台运行权限已就绪" else "建议完成运行向导",
+-                accent = !stableReady,
+-                onClick = { onNavigate(SettingsScreen.STABLE_OPERATION) },
+-            )
+-            SettingsDivider()
+-            SettingsMenuRow(
+-                icon = "◒",
+-                title = "通知设置",
+-                summary = when {
+-                    !state.systemAccess.notificationsReady(usesLiveNotificationChannel()) -> "系统通知未允许"
+-                    state.settings.liveNotificationEnabled ->
+-                        "状态通知已开启 · ${state.settings.notificationRefreshSeconds} 秒刷新"
+-                    else -> "状态通知已关闭"
+-                },
+-                accent = !state.systemAccess.notificationsReady(usesLiveNotificationChannel()),
+-                onClick = { onNavigate(SettingsScreen.NOTIFICATIONS) },
+-            )
+-        }
+ 
+-        SettingsSection("设备与数据") {
+-            SettingsMenuRow(
+-                icon = "⌁",
+-                title = "硬件修正",
+-                summary = hardwareSummary(state.settings),
+-                onClick = { onNavigate(SettingsScreen.HARDWARE) },
+-            )
+-            SettingsDivider()
+-            SettingsMenuRow(
+-                icon = "◫",
+-                title = "系统与诊断",
+-                summary = if (state.settings.debugMode) "诊断模式已开启" else "后台权限、应用详情与调试",
+-                onClick = { onNavigate(SettingsScreen.SYSTEM) },
+-            )
+-            SettingsDivider()
+-            SettingsMenuRow(
+-                icon = "▦",
+-                title = "数据管理",
+-                summary = "24 小时原始记录 · 8 小时曲线",
+-                onClick = { onNavigate(SettingsScreen.DATA) },
+-            )
++    val entries = listOf(
++        SettingsEntry("Shizuku 授权", shizukuStatus(state), SettingsScreen.SYSTEM, "shizuku 权限 授权"),
++        SettingsEntry(
++            "外观设置",
++            "${state.settings.themeMode.label} · ${state.settings.themePalette.label} · ${state.settings.uiDensity.label}",
++            SettingsScreen.APPEARANCE,
++            "主题 配色 字体 圆角 密度 外观",
++        ),
++        SettingsEntry(
++            "充电检测",
++            when {
++                !state.settings.chargeDetectEnabled -> "已关闭"
++                state.insight.capability != null ->
++                    "${state.insight.stage.label} · ${state.insight.capability!!.maxPowerW.toInt()} W 充电器"
++                else -> "识别充电器、效率与异常"
++            },
++            SettingsScreen.CHARGE_DETECT,
++            "充电 检测 协议 效率 健康 异常",
++        ),
++        SettingsEntry(
++            "通知设置",
++            when {
++                !state.systemAccess.notificationsReady(usesLiveNotificationChannel()) -> "系统通知未允许"
++                state.settings.liveNotificationEnabled ->
++                    "状态通知已开启 · ${state.settings.notificationRefreshSeconds} 秒刷新"
++                else -> "状态通知已关闭"
++            },
++            SettingsScreen.NOTIFICATIONS,
++            "通知 刷新 实时活动 精简",
++        ),
++        SettingsEntry(
++            "稳定运行",
++            if (stableReady) "后台运行权限已就绪" else "建议完成运行向导",
++            SettingsScreen.STABLE_OPERATION,
++            "后台 保活 电池优化 权限",
++        ),
++        SettingsEntry("硬件修正", hardwareSummary(state.settings), SettingsScreen.HARDWARE, "电流 电压 双芯 修正"),
++        SettingsEntry(
++            "系统与诊断",
++            if (state.settings.debugMode) "诊断模式已开启" else "后台权限、应用详情与调试",
++            SettingsScreen.SYSTEM,
++            "诊断 调试 系统 应用详情",
++        ),
++        SettingsEntry("数据管理", "24 小时原始记录 · 8 小时曲线", SettingsScreen.DATA, "数据 导出 清除 存储"),
++        SettingsEntry("常见问题", "功率、后台运行与读数说明", SettingsScreen.FAQ, "faq 帮助 问题"),
++        SettingsEntry("关于 OPPower", "版本 ${BuildConfig.VERSION_NAME} · 更新与许可", SettingsScreen.ABOUT, "关于 版本 许可"),
++    )
++    val normalized = query.trim()
++    val filtered = if (normalized.isEmpty()) {
++        entries
++    } else {
++        entries.filter { entry ->
++            entry.title.contains(normalized, ignoreCase = true) ||
++                entry.summary.contains(normalized, ignoreCase = true) ||
++                entry.keywords.contains(normalized, ignoreCase = true)
+         }
++    }
+ 
+-        SettingsSection("帮助与关于") {
+-            SettingsMenuRow(
+-                icon = "?",
+-                title = "常见问题",
+-                summary = "功率、后台运行与读数说明",
+-                onClick = { onNavigate(SettingsScreen.FAQ) },
+-            )
+-            SettingsDivider()
+-            SettingsMenuRow(
+-                icon = "i",
+-                title = "关于 OPPower",
+-                summary = "版本 ${BuildConfig.VERSION_NAME} · 更新与许可",
+-                onClick = { onNavigate(SettingsScreen.ABOUT) },
+-            )
++    CouiPage(title = "设置", subtitle = "OPPower · 外观、检测、通知与数据", onBack = onBack) {
++        Spacer(Modifier.height(12.dp))
++        CouiSearchField(value = query, onValueChange = { query = it })
++        if (normalized.isNotEmpty() && filtered.isEmpty()) {
++            CouiGroup(title = "搜索结果", footer = "换个关键词试试，例如“通知”“检测”“权限”。") {
++                CouiRow(title = "没有匹配的设置", summary = normalized)
++            }
++            return@CouiPage
+         }
+-
+-        GlassPanel(
+-            modifier = Modifier.fillMaxWidth().clickable(onClick = onJoinQq),
+-            tint = AccentSurface,
+-            accent = Cyan,
+-            highlighted = true,
+-            shape = RoundedCornerShape(14.dp),
+-            shadowElevation = 9.dp,
+-        ) {
+-            Row(Modifier.padding(horizontal = 13.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+-                SettingsGlyph("Q", false)
+-                Column(Modifier.weight(1f).padding(horizontal = 11.dp)) {
+-                    Text("加入 OPPower 用户群", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+-                    Text("群号 $QQ_GROUP_NUMBER · 点击复制并打开 QQ", color = TextSecondary, fontSize = 9.sp, modifier = Modifier.padding(top = 2.dp))
++        val grouped = if (normalized.isEmpty()) {
++            filtered.chunked(5)
++        } else {
++            listOf(filtered)
++        }
++        grouped.forEachIndexed { index, chunk ->
++            CouiGroup(
++                title = when {
++                    normalized.isNotEmpty() -> if (index == 0) "搜索结果" else null
++                    index == 0 -> "常用"
++                    index == 1 -> "设备与数据"
++                    else -> "帮助与关于"
++                },
++            ) {
++                chunk.forEachIndexed { rowIndex, entry ->
++                    if (rowIndex > 0) CouiDivider()
++                    CouiRow(
++                        title = entry.title,
++                        summary = entry.summary,
++                        chevron = true,
++                        onClick = { onNavigate(entry.screen) },
++                    )
+                 }
+-                Text("›", color = Cyan, fontSize = 18.sp)
+             }
+         }
++
++        CouiGroup(title = "用户群") {
++            CouiRow(
++                title = "加入 OPPower 用户群",
++                summary = "群号 $QQ_GROUP_NUMBER · 点击复制并打开 QQ",
++                value = "›",
++                valueColor = Cyan,
++                onClick = onJoinQq,
++            )
++        }
+         Text(
+             "所有可见设置入口均已接入功能；未实现的项目不会显示为空入口。",
+-            color = TextSecondary,
+-            fontSize = 8.sp,
+-            lineHeight = 12.sp,
+-            modifier = Modifier.padding(start = 3.dp, top = 1.dp),
++            style = Coui.groupFooter,
++            color = TextSecondary.copy(alpha = 0.86f),
++            modifier = Modifier.padding(start = Coui.titleInset, top = 10.dp),
+         )
+     }
+ }
+@@ -246,59 +264,87 @@ private fun AppearanceSettingsPage(
+     onSettingsChange: ((RuntimeSettings) -> RuntimeSettings) -> Unit,
+ ) {
+     val settings = state.settings
+-    SettingsPage("外观设置", "主题、密度与界面显示", onBack) {
+-        SettingsSection("主题模式") {
+-            ChoiceGrid(
+-                options = enumValues<ThemeMode>().toList(),
+-                selected = settings.themeMode,
+-                label = { it.label },
+-                onSelect = { value -> onSettingsChange { it.copy(themeMode = value) } },
+-            )
+-        }
+-        SettingsSection("主题配色") {
+-            ChoiceGrid(
+-                options = enumValues<ThemePalette>().toList(),
+-                selected = settings.themePalette,
+-                label = { it.label },
+-                onSelect = { value -> onSettingsChange { it.copy(themePalette = value) } },
+-                columns = 2,
++    CouiPage("外观设置", "主题、密度与界面显示", onBack) {
++        CouiGroup("主题模式") {
++            CouiChoiceRow(
++                title = "深浅模式",
++                labels = enumValues<ThemeMode>().map { it.label },
++                selectedIndex = settings.themeMode.ordinal,
++                onSelected = { index ->
++                    onSettingsChange { it.copy(themeMode = enumValues<ThemeMode>()[index]) }
++                },
+             )
+         }
+-        SettingsSection("文字与界面比例") {
+-            SettingLabel("字体大小")
+-            ChoiceGrid(
+-                options = listOf(0.9f, 1f, 1.1f),
+-                selected = settings.fontScale,
+-                label = { when (it) { 0.9f -> "较小"; 1.1f -> "较大"; else -> "标准" } },
+-                onSelect = { value -> onSettingsChange { it.copy(fontScale = value) } },
++        CouiGroup("主题配色") {
++            CouiChoiceRow(
++                title = "强调色",
++                labels = enumValues<ThemePalette>().take(3).map { it.label },
++                selectedIndex = settings.themePalette.ordinal.coerceIn(0, 2),
++                onSelected = { index ->
++                    onSettingsChange { it.copy(themePalette = enumValues<ThemePalette>()[index]) }
++                },
+             )
+-            SettingsDivider(Modifier.padding(vertical = 10.dp))
+-            SettingLabel("界面比例")
+-            ChoiceGrid(
+-                options = listOf(0.9f, 1f, 1.1f),
+-                selected = settings.uiScale,
+-                label = { when (it) { 0.9f -> "紧凑"; 1.1f -> "宽松"; else -> "标准" } },
+-                onSelect = { value -> onSettingsChange { it.copy(uiScale = value) } },
++            CouiDivider()
++            CouiChoiceRow(
++                title = "更多强调色",
++                labels = enumValues<ThemePalette>().drop(3).map { it.label },
++                selectedIndex = (settings.themePalette.ordinal - 3).coerceIn(0, 2),
++                onSelected = { index ->
++                    onSettingsChange { it.copy(themePalette = enumValues<ThemePalette>()[index + 3]) }
++                },
+             )
+         }
+-        SettingsSection("卡片与后台") {
+-            Text("卡片不透明度", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+-            Text(
+-                "${(settings.cardOpacity * 100).roundToInt()}%",
+-                color = Cyan,
+-                fontSize = 11.sp,
+-                modifier = Modifier.padding(top = 3.dp),
++        CouiGroup("界面比例") {
++            CouiChoiceRow(
++                title = "字体大小",
++                labels = listOf("较小", "标准", "较大"),
++                selectedIndex = listOf(0.9f, 1f, 1.1f).indexOfFirst { it == settings.fontScale }
++                    .coerceAtLeast(1),
++                onSelected = { index ->
++                    onSettingsChange { it.copy(fontScale = listOf(0.9f, 1f, 1.1f)[index]) }
++                },
++            )
++            CouiDivider()
++            CouiChoiceRow(
++                title = "界面比例",
++                labels = listOf("紧凑", "标准", "宽松"),
++                selectedIndex = listOf(0.9f, 1f, 1.1f).indexOfFirst { it == settings.uiScale }
++                    .coerceAtLeast(1),
++                onSelected = { index ->
++                    onSettingsChange { it.copy(uiScale = listOf(0.9f, 1f, 1.1f)[index]) }
++                },
+             )
+-            Slider(
+-                value = settings.cardOpacity,
+-                onValueChange = { value -> onSettingsChange { it.copy(cardOpacity = value) } },
+-                valueRange = 0.65f..1f,
+-                steps = 6,
++            CouiDivider()
++            CouiChoiceRow(
++                title = "列表密度",
++                summary = "紧凑模式行高 42dp、字号收一档，一屏多看 2~3 条；标准模式 48dp",
++                labels = enumValues<UiDensity>().map { it.label },
++                selectedIndex = settings.uiDensity.ordinal,
++                onSelected = { index ->
++                    onSettingsChange { it.copy(uiDensity = enumValues<UiDensity>()[index]) }
++                },
+             )
+-            SettingsDivider()
+-            SettingSwitchRow(
++        }
++        CouiGroup("卡片与后台") {
++            Column(Modifier.padding(horizontal = Coui.rowPadding, vertical = Coui.contentPadding)) {
++                Text("卡片不透明度", style = Coui.itemTitle, color = TextPrimary)
++                Text(
++                    "${(settings.cardOpacity * 100).roundToInt()}%",
++                    style = Coui.itemValue,
++                    color = Cyan,
++                    modifier = Modifier.padding(top = 3.dp),
++                )
++                Slider(
++                    value = settings.cardOpacity,
++                    onValueChange = { value -> onSettingsChange { it.copy(cardOpacity = value) } },
++                    valueRange = 0.65f..1f,
++                    steps = 6,
++                )
++            }
++            CouiDivider()
++            CouiSwitchRow(
+                 title = "隐藏后台任务",
+-                description = "从最近任务和预览中隐藏，不影响常驻快充服务",
++                summary = "从最近任务和预览中隐藏，不影响常驻快充服务",
+                 checked = settings.hideFromRecents,
+                 onCheckedChange = { value -> onSettingsChange { it.copy(hideFromRecents = value) } },
+             )
+@@ -306,6 +352,114 @@ private fun AppearanceSettingsPage(
+     }
+ }
+ 
++@Composable
++private fun ChargeDetectSettingsPage(
++    state: UiState,
++    onBack: () -> Unit,
++    onSettingsChange: ((RuntimeSettings) -> RuntimeSettings) -> Unit,
++) {
++    val settings = state.settings
++    val insight = state.insight
++    CouiPage("充电检测", "识别充电器能力、充电阶段与异常", onBack) {
++        CouiGroup(
++            title = "检测",
++            footer = "检测只读取 /sys/class/power_supply 快照，不写入任何设置，也不影响快充控制。",
++        ) {
++            CouiSwitchRow(
++                title = "充电检测卡片",
++                summary = "在主页面显示充电器协议、效率与稳定性",
++                checked = settings.chargeDetectEnabled,
++                onCheckedChange = { value -> onSettingsChange { it.copy(chargeDetectEnabled = value) } },
++            )
++            if (settings.chargeDetectEnabled) {
++                CouiDivider()
++                CouiChoiceRow(
++                    title = "检测间隔",
++                    summary = "间隔越短越灵敏，Shizuku 读取次数也越多",
++                    labels = listOf("3 秒", "5 秒", "10 秒", "20 秒", "30 秒"),
++                    selectedIndex = listOf(3, 5, 10, 20, 30)
++                        .indexOfFirst { it == settings.detectionIntervalSeconds }
++                        .coerceAtLeast(2),
++                    onSelected = { index ->
++                        onSettingsChange {
++                            it.copy(detectionIntervalSeconds = listOf(3, 5, 10, 20, 30)[index])
++                        }
++                    },
++                )
++            }
++        }
++        CouiGroup("提醒") {
++            CouiSwitchRow(
++                title = "异常提醒",
++                summary = "电流为零、功率波动或温度偏高时发一条通知",
++                checked = settings.anomalyAlertEnabled,
++                onCheckedChange = { value -> onSettingsChange { it.copy(anomalyAlertEnabled = value) } },
++            )
++            CouiDivider()
++            CouiSwitchRow(
++                title = "充满提醒",
++                summary = "电量达到 100% 时提醒拔电，便于保护电池",
++                checked = settings.fullChargeAlertEnabled,
++                onCheckedChange = { value -> onSettingsChange { it.copy(fullChargeAlertEnabled = value) } },
++            )
++        }
++        CouiGroup("显示") {
++            CouiSwitchRow(
++                title = "显示电池健康",
++                summary = "由满充容量与设计容量估算，仅供参考",
++                checked = settings.showBatteryHealth,
++                onCheckedChange = { value -> onSettingsChange { it.copy(showBatteryHealth = value) } },
++            )
++        }
++        CouiGroup("本次检测") {
++            CouiRow(
++                title = "充电阶段",
++                summary = insight.stageDetail.ifBlank { "接电后自动判断" },
++                value = insight.stage.label,
++                valueColor = Cyan,
++            )
++            CouiDivider()
++            CouiRow(
++                title = "充电器",
++                summary = insight.capability?.let { "${it.supplyName} · ${it.supplyType}" } ?: "未识别到供电节点",
++                value = insight.capability?.let { "${it.maxPowerW.toInt()} W" } ?: "—",
++            )
++            CouiDivider()
++            CouiRow(
++                title = "利用率",
++                summary = "实际输入功率 / 充电器声称能力",
++                value = insight.utilizationPercent?.let { "$it%" } ?: "—",
++            )
++            CouiDivider()
++            CouiRow(
++                title = "稳定性",
++                summary = stabilityLabel(insight.stabilityPercent),
++                value = "${insight.stabilityPercent}%",
++            )
++            if (insight.health != null) {
++                CouiDivider()
++                CouiRow(
++                    title = "电池健康",
++                    summary = insight.health!!.let { "${it.fullMah} / ${it.designMah} mAh" },
++                    value = insight.health!!.percent?.let { "$it%" } ?: "—",
++                )
++                insight.health!!.cycleCount?.let { cycles ->
++                    CouiDivider()
++                    CouiRow(title = "循环次数", value = "$cycles 次")
++                }
++            }
++        }
++        if (insight.anomalies.isNotEmpty()) {
++            CouiGroup(title = "当前异常", footer = "异常只用于提示，不会自动改变充电策略。") {
++                insight.anomalies.forEachIndexed { index, text ->
++                    if (index > 0) CouiDivider()
++                    CouiRow(title = text, value = "!", valueColor = Amber)
++                }
++            }
++        }
++    }
++}
++
+ @Composable
+ private fun NotificationSettingsPage(
+     state: UiState,
+@@ -314,92 +468,110 @@ private fun NotificationSettingsPage(
+ ) {
+     val context = LocalContext.current
+     val settings = state.settings
+-    SettingsPage("通知设置", "常驻状态通知与刷新频率", onBack) {
+-        SettingsSection("通知") {
+-            SettingSwitchRow(
++    CouiPage("通知设置", "常驻状态通知与刷新频率", onBack) {
++        CouiGroup("通知") {
++            CouiSwitchRow(
+                 title = "状态通知",
+-                description = "显示快充状态、功率和电池数据；关闭后保留精简后台通知",
++                summary = "显示快充状态、功率和电池数据；关闭后保留精简后台通知",
+                 checked = settings.liveNotificationEnabled,
+                 onCheckedChange = { value -> onSettingsChange { it.copy(liveNotificationEnabled = value) } },
+             )
+-            SettingsDivider()
+-            SettingActionRow(
++            CouiDivider()
++            CouiRow(
+                 title = "系统通知权限",
+-                value = if (state.systemAccess.notificationsAllowed) "已允许" else "未允许 · 前往设置",
++                value = if (state.systemAccess.notificationsAllowed) "已允许" else "未允许",
++                valueColor = if (state.systemAccess.notificationsAllowed) Cyan else Amber,
++                chevron = true,
+                 onClick = { openNotificationSettings(context) },
+             )
+-            SettingsDivider()
+-            SettingActionRow(
++            CouiDivider()
++            CouiRow(
+                 title = if (usesLiveNotificationChannel()) "实时活动通知渠道" else "状态通知渠道",
+                 value = when {
+-                    usesLiveNotificationChannel() && !state.systemAccess.liveNotificationChannelEnabled ->
+-                        "已关闭 · 前往设置"
+-                    !usesLiveNotificationChannel() && !state.systemAccess.statusNotificationChannelEnabled ->
+-                        "已关闭 · 前往设置"
++                    usesLiveNotificationChannel() && !state.systemAccess.liveNotificationChannelEnabled -> "已关闭"
++                    !usesLiveNotificationChannel() && !state.systemAccess.statusNotificationChannelEnabled -> "已关闭"
+                     else -> "已开启"
+                 },
++                valueColor = Cyan,
++                chevron = true,
+                 onClick = { openNotificationSettings(context) },
+             )
+             if (Build.VERSION.SDK_INT >= 36) {
+-                SettingsDivider()
+-                SettingActionRow(
++                CouiDivider()
++                CouiRow(
+                     title = "流体云实时活动",
+-                    value = "在系统通知页检查显示权限",
++                    summary = "需要在系统通知页开启显示权限",
++                    chevron = true,
+                     onClick = { openNotificationSettings(context) },
+                 )
+             }
+         }
+-
+-        SettingsSection("通知内容") {
+-            SettingSwitchRow("显示电量", "百分比", settings.notificationShowBatteryPercent) { value ->
++        CouiGroup("通知样式", footer = "精简只显示功率与电量；详细会带充电阶段与充电器信息。") {
++            CouiChoiceRow(
++                title = "内容层级",
++                labels = enumValues<NotificationStyle>().map { it.label },
++                selectedIndex = settings.notificationStyle.ordinal,
++                onSelected = { index ->
++                    onSettingsChange { it.copy(notificationStyle = enumValues<NotificationStyle>()[index]) }
++                },
++            )
++        }
++        CouiGroup("通知内容") {
++            CouiSwitchRow("显示电量", "百分比", settings.notificationShowBatteryPercent) { value ->
+                 onSettingsChange { it.copy(notificationShowBatteryPercent = value) }
+             }
+-            SettingsDivider()
+-            SettingSwitchRow("显示电流", "单位 mA", settings.notificationShowCurrent) { value ->
++            CouiDivider()
++            CouiSwitchRow("显示电流", "单位 mA", settings.notificationShowCurrent) { value ->
+                 onSettingsChange { it.copy(notificationShowCurrent = value) }
+             }
+-            SettingsDivider()
+-            SettingSwitchRow("显示电压", "单位 V", settings.notificationShowVoltage) { value ->
++            CouiDivider()
++            CouiSwitchRow("显示电压", "单位 V", settings.notificationShowVoltage) { value ->
+                 onSettingsChange { it.copy(notificationShowVoltage = value) }
+             }
+-            SettingsDivider()
+-            SettingSwitchRow("显示温度", "", settings.notificationShowTemperature) { value ->
++            CouiDivider()
++            CouiSwitchRow("显示温度", "", settings.notificationShowTemperature) { value ->
+                 onSettingsChange { it.copy(notificationShowTemperature = value) }
+             }
+-            SettingsDivider()
+-            SettingSwitchRow("功率只显示整数", "小于 1 W 时仍保留小数", settings.notificationIntegerPower) { value ->
++            CouiDivider()
++            CouiSwitchRow("功率只显示整数", "小于 1 W 时仍保留小数", settings.notificationIntegerPower) { value ->
+                 onSettingsChange { it.copy(notificationIntegerPower = value) }
+             }
+         }
+-
+-        SettingsSection("刷新与自动精简") {
+-            SettingLabel("刷新间隔")
+-            ChoiceGrid(
+-                options = listOf(2, 5, 10, 30),
+-                selected = settings.notificationRefreshSeconds,
+-                label = { "$it 秒" },
+-                onSelect = { value -> onSettingsChange { it.copy(notificationRefreshSeconds = value) } },
+-                columns = 4,
++        CouiGroup("刷新与自动精简") {
++            CouiChoiceRow(
++                title = "刷新间隔",
++                labels = listOf("2 秒", "5 秒", "10 秒", "30 秒"),
++                selectedIndex = listOf(2, 5, 10, 30)
++                    .indexOfFirst { it == settings.notificationRefreshSeconds }
++                    .coerceAtLeast(1),
++                onSelected = { index ->
++                    onSettingsChange { it.copy(notificationRefreshSeconds = listOf(2, 5, 10, 30)[index]) }
++                },
+             )
+-            SettingLabel("熄屏刷新间隔")
+-            ChoiceGrid(
+-                options = listOf(3, 30, 60, 300),
+-                selected = settings.notificationScreenOffRefreshSeconds,
+-                label = { if (it < 60) "$it 秒" else "${it / 60} 分钟" },
+-                onSelect = { value -> onSettingsChange { it.copy(notificationScreenOffRefreshSeconds = value) } },
+-                columns = 4,
++            CouiDivider()
++            CouiChoiceRow(
++                title = "熄屏刷新间隔",
++                labels = listOf("3 秒", "30 秒", "1 分钟", "5 分钟"),
++                selectedIndex = listOf(3, 30, 60, 300)
++                    .indexOfFirst { it == settings.notificationScreenOffRefreshSeconds }
++                    .coerceAtLeast(1),
++                onSelected = { index ->
++                    onSettingsChange {
++                        it.copy(notificationScreenOffRefreshSeconds = listOf(3, 30, 60, 300)[index])
++                    }
++                },
+             )
+-            SettingsDivider(Modifier.padding(vertical = 10.dp))
+-            SettingSwitchRow(
++            CouiDivider()
++            CouiSwitchRow(
+                 title = "充满后精简状态通知",
+-                description = "电量 100% 时恢复系统充电策略，并保留一条精简后台通知",
++                summary = "电量 100% 时恢复系统充电策略，并保留一条精简后台通知",
+                 checked = settings.notificationAutoCloseOnFull,
+                 onCheckedChange = { value -> onSettingsChange { it.copy(notificationAutoCloseOnFull = value) } },
+             )
+-            SettingsDivider()
+-            SettingSwitchRow(
++            CouiDivider()
++            CouiSwitchRow(
+                 title = "熄屏后精简状态通知",
+-                description = "熄屏时只保留必要后台通知，亮屏后恢复详细数据",
++                summary = "熄屏时只保留必要后台通知，亮屏后恢复详细数据",
+                 checked = settings.notificationAutoCloseOnScreenOff,
+                 onCheckedChange = { value -> onSettingsChange { it.copy(notificationAutoCloseOnScreenOff = value) } },
+             )
+@@ -418,54 +590,65 @@ private fun StableOperationPage(
+     val batteryOk = state.systemAccess.batteryUnrestricted
+     val overlayOk = state.systemAccess.overlayAllowed
+     val accessibilityOk = state.systemAccess.accessibilityEnabled
+-    SettingsPage("稳定运行", "保证亮屏快充与记录服务持续工作", onBack) {
+-        SettingsSection("运行检查") {
+-            StatusRow("通知权限", if (notificationOk) "已就绪" else "需要授权", notificationOk)
+-            SettingsDivider()
+-            StatusRow("电池优化", if (batteryOk) "不受限制" else "可能限制后台", batteryOk)
+-            SettingsDivider()
+-            StatusRow("悬浮窗保活", if (overlayOk) "权限已授予" else "未授权", overlayOk)
+-            SettingsDivider()
+-            StatusRow("无障碍保活", if (accessibilityOk) "已启用" else "未启用", accessibilityOk)
++    CouiPage("稳定运行", "保证亮屏快充与记录服务持续工作", onBack) {
++        CouiGroup("运行检查") {
++            CouiStatusRow("通知权限", if (notificationOk) "已就绪" else "需要授权", notificationOk)
++            CouiDivider()
++            CouiStatusRow("电池优化", if (batteryOk) "不受限制" else "可能限制后台", batteryOk)
++            CouiDivider()
++            CouiStatusRow("悬浮窗保活", if (overlayOk) "权限已授予" else "未授权", overlayOk, warn = true)
++            CouiDivider()
++            CouiStatusRow("无障碍保活", if (accessibilityOk) "已启用" else "未启用", accessibilityOk, warn = true)
+         }
+-        SettingsSection("权限入口") {
+-            SettingActionRow("通知设置", if (notificationOk) "已允许" else "前往设置") {
+-                openNotificationSettings(context)
+-            }
+-            SettingsDivider()
+-            SettingActionRow("电池优化", if (batteryOk) "不受限制" else "前往设置") {
+-                openBatteryOptimizationSettings(context)
+-            }
+-            SettingsDivider()
+-            SettingActionRow("应用详情", "耗电与自启动管理") { openAppDetails(context) }
+-            SettingsDivider()
+-            SettingActionRow("高级保活", "悬浮窗与无障碍") { onNavigate(SettingsScreen.ADVANCED_KEEP_ALIVE) }
++        CouiGroup("权限入口") {
++            CouiRow(
++                title = "通知设置",
++                value = if (notificationOk) "已允许" else "前往设置",
++                chevron = true,
++                onClick = { openNotificationSettings(context) },
++            )
++            CouiDivider()
++            CouiRow(
++                title = "电池优化",
++                value = if (batteryOk) "不受限制" else "前往设置",
++                chevron = true,
++                onClick = { openBatteryOptimizationSettings(context) },
++            )
++            CouiDivider()
++            CouiRow(
++                title = "应用详情",
++                value = "耗电与自启动",
++                chevron = true,
++                onClick = { openAppDetails(context) },
++            )
++            CouiDivider()
++            CouiRow(
++                title = "高级保活",
++                value = "悬浮窗与无障碍",
++                chevron = true,
++                onClick = { onNavigate(SettingsScreen.ADVANCED_KEEP_ALIVE) },
++            )
+         }
+-        SettingsSection("重要说明") {
+-            Text(
+-                "ColorOS 可能在温度较高或长时间亮屏时限制后台服务。建议将 OPPower 加入电池优化白名单，并在多任务界面锁定。" +
+-                    "特殊情况下再启用高级保活，日常使用无需同时开启全部选项。",
+-                color = TextSecondary,
+-                fontSize = 10.sp,
+-                lineHeight = 17.sp,
+-                modifier = Modifier.padding(vertical = 11.dp),
++        CouiGroup(
++            title = "重要说明",
++            footer = "ColorOS 可能在温度较高或长时间亮屏时限制后台服务。建议将 OPPower 加入电池优化白名单，" +
++                "并在多任务界面锁定。特殊情况再启用高级保活，日常无需全开。",
++        ) {
++            CouiRow(
++                title = "查看完整说明",
++                value = "重要说明",
++                chevron = true,
++                onClick = { onNavigate(SettingsScreen.IMPORTANT_NOTICE) },
+             )
+-            SettingsDivider()
+-            SettingActionRow("查看完整说明", "重要说明") { onNavigate(SettingsScreen.IMPORTANT_NOTICE) }
+         }
+-        SettingsSection("当前控制服务") {
+-            StatusRow(
++        CouiGroup("当前控制服务") {
++            CouiStatusRow(
+                 "控制状态",
+                 state.controllerStatus.phase.label,
+                 state.controllerStatus.phase == com.oppower.model.ControllerPhase.ACTIVE,
+             )
+-            Text(
+-                state.controllerStatus.message,
+-                color = TextSecondary,
+-                fontSize = 9.sp,
+-                lineHeight = 15.sp,
+-                modifier = Modifier.padding(bottom = 11.dp),
+-            )
++            CouiDivider()
++            CouiRow(title = "系统返回", summary = state.controllerStatus.message)
+         }
+     }
+ }
+@@ -479,11 +662,14 @@ private fun AdvancedKeepAlivePage(
+     val context = LocalContext.current
+     val overlayGranted = state.systemAccess.overlayAllowed
+     val accessibilityEnabled = state.systemAccess.accessibilityEnabled
+-    SettingsPage("高级保活", "非特殊情况无需开启", onBack) {
+-        SettingsSection("悬浮窗保活") {
+-            SettingSwitchRow(
++    CouiPage("高级保活", "非特殊情况无需开启", onBack) {
++        CouiGroup(
++            title = "悬浮窗保活",
++            footer = "透明悬浮窗尺寸仅 1×1 像素，不显示内容，也不会拦截触摸。",
++        ) {
++            CouiSwitchRow(
+                 title = "挂载 1×1 透明悬浮窗",
+-                description = "开启后持续帮助控制服务恢复；需要悬浮窗权限",
++                summary = "开启后持续帮助控制服务恢复；需要悬浮窗权限",
+                 checked = state.settings.overlayKeepAliveEnabled && overlayGranted,
+                 onCheckedChange = { enabled ->
+                     if (enabled && !overlayGranted) {
+@@ -494,31 +680,25 @@ private fun AdvancedKeepAlivePage(
+                     }
+                 },
+             )
+-            SettingsDivider()
+-            SettingActionRow(
++            CouiDivider()
++            CouiRow(
+                 "悬浮窗权限",
+-                if (overlayGranted) "已授权" else "前往授权",
++                value = if (overlayGranted) "已授权" else "前往授权",
++                chevron = true,
+                 onClick = { openOverlayPermission(context) },
+             )
+-            Text(
+-                "透明悬浮窗尺寸仅为 1×1 像素，不显示内容，也不会拦截触摸。",
+-                color = TextSecondary,
+-                fontSize = 9.sp,
+-                modifier = Modifier.padding(bottom = 11.dp),
+-            )
+         }
+-        SettingsSection("无障碍保活") {
+-            StatusRow("服务状态", if (accessibilityEnabled) "已启用" else "未启用", accessibilityEnabled)
+-            SettingsDivider()
+-            SettingActionRow("打开无障碍设置", "OPPower 保活服务") {
+-                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+-            }
+-            Text(
+-                "无障碍服务只用于维持后台监控，不读取屏幕内容、不执行自动点击，也不保存任何辅助功能数据。",
+-                color = TextSecondary,
+-                fontSize = 9.sp,
+-                lineHeight = 15.sp,
+-                modifier = Modifier.padding(vertical = 11.dp),
++        CouiGroup(
++            title = "无障碍保活",
++            footer = "无障碍服务只用于维持后台监控，不读取屏幕内容、不执行自动点击，也不保存任何辅助功能数据。",
++        ) {
++            CouiStatusRow("服务状态", if (accessibilityEnabled) "已启用" else "未启用", accessibilityEnabled)
++            CouiDivider()
++            CouiRow(
++                title = "打开无障碍设置",
++                value = "OPPower 保活服务",
++                chevron = true,
++                onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+             )
+         }
+     }
+@@ -531,57 +711,54 @@ private fun HardwareSettingsPage(
+     onSettingsChange: ((RuntimeSettings) -> RuntimeSettings) -> Unit,
+ ) {
+     val settings = state.settings
+-    SettingsPage("硬件修正", "兼容不同设备的电池读数", onBack) {
+-        SettingsSection("电流与功率") {
+-            SettingSwitchRow(
++    CouiPage("硬件修正", "兼容不同设备的电池读数", onBack) {
++        CouiGroup("电流与功率") {
++            CouiSwitchRow(
+                 title = "反转电流正负",
+-                description = "如果充电时电流显示为负，请开启此项",
++                summary = "如果充电时电流显示为负，请开启此项",
+                 checked = settings.invertCurrentSign,
+                 onCheckedChange = { value -> onSettingsChange { it.copy(invertCurrentSign = value) } },
+             )
+-            SettingsDivider()
+-            SettingSwitchRow(
++            CouiDivider()
++            CouiSwitchRow(
+                 title = "电流和功率显示绝对值",
+-                description = "只改变界面显示，不影响曲线原始方向",
++                summary = "只改变界面显示，不影响曲线原始方向",
+                 checked = settings.absoluteCurrentPowerDisplay,
+                 onCheckedChange = { value -> onSettingsChange { it.copy(absoluteCurrentPowerDisplay = value) } },
+             )
+         }
+-        SettingsSection("电池结构") {
+-            SettingSwitchRow(
++        CouiGroup("电池结构") {
++            CouiSwitchRow(
+                 title = "双芯电池修正",
+-                description = "双电芯机型开启后，电流与功率按两芯合并显示",
++                summary = "双电芯机型开启后，电流与功率按两芯合并显示",
+                 checked = settings.doubleCellCorrection,
+                 onCheckedChange = { value -> onSettingsChange { it.copy(doubleCellCorrection = value) } },
+             )
+-            SettingsDivider()
+-            SettingSwitchRow(
++            CouiDivider()
++            CouiSwitchRow(
+                 title = "虚拟电压",
+-                description = "设备无法读取电压时，使用 3.85 V 估算值",
++                summary = "设备无法读取电压时，使用 3.85 V 估算值",
+                 checked = settings.virtualVoltage,
+                 onCheckedChange = { value -> onSettingsChange { it.copy(virtualVoltage = value) } },
+             )
+         }
+-        SettingsSection("当前读数") {
+-            StatusRow("电流", if (state.battery.sampleValid) "${state.battery.currentMa} mA" else "—", true)
+-            SettingsDivider()
+-            StatusRow(
++        CouiGroup(
++            title = "当前读数",
++            footer = "当前机型 RMX8899 为单电芯，默认无需开启双芯修正。若读数方向不正确，先尝试“反转电流正负”。",
++        ) {
++            CouiRow(
++                "电流",
++                value = if (state.battery.sampleValid) "${state.battery.currentMa} mA" else "—",
++            )
++            CouiDivider()
++            CouiRow(
+                 "电压",
+-                if (state.battery.sampleValid) "${(state.battery.voltageMv / 1000f).oneDecimal()} V" else "—",
+-                true,
++                value = if (state.battery.sampleValid) "${(state.battery.voltageMv / 1000f).oneDecimal()} V" else "—",
+             )
+-            SettingsDivider()
+-            StatusRow(
++            CouiDivider()
++            CouiRow(
+                 "电池功率",
+-                if (state.battery.sampleValid) "${state.battery.powerW.oneDecimal()} W" else "—",
+-                true,
+-            )
+-            Text(
+-                "当前机型 RMX8899 为单电芯，默认无需开启双芯修正。若读数方向不正确，先尝试“反转电流正负”。",
+-                color = TextSecondary,
+-                fontSize = 9.sp,
+-                lineHeight = 15.sp,
+-                modifier = Modifier.padding(vertical = 11.dp),
++                value = if (state.battery.sampleValid) "${state.battery.powerW.oneDecimal()} W" else "—",
+             )
+         }
+     }
+@@ -597,53 +774,66 @@ private fun SystemSettingsPage(
+     val context = LocalContext.current
+     val batteryOk = state.systemAccess.batteryUnrestricted
+     val notificationOk = state.systemAccess.notificationsReady(usesLiveNotificationChannel())
+-    SettingsPage("系统与诊断", "后台权限与数据来源", onBack) {
+-        SettingsSection("后台运行") {
+-            SettingActionRow(
++    CouiPage("系统与诊断", "后台权限与数据来源", onBack) {
++        CouiGroup(
++            title = "后台运行",
++            footer = "OPPower 只通过 Shizuku 读取和调整已确认的 ColorOS 充电项目；授权失败时会停止写入并恢复系统默认。",
++        ) {
++            CouiRow(
+                 title = "系统通知权限",
+-                value = if (notificationOk) "已允许" else "未允许 · 前往设置",
++                value = if (notificationOk) "已允许" else "未允许",
++                valueColor = if (notificationOk) Cyan else Amber,
++                chevron = true,
+                 onClick = { openNotificationSettings(context) },
+             )
+-            SettingsDivider()
+-            SettingActionRow(
++            CouiDivider()
++            CouiRow(
+                 title = "电池优化",
+                 value = if (batteryOk) "不受限制" else "前往设置",
++                chevron = true,
+                 onClick = { openBatteryOptimizationSettings(context) },
+             )
+-            SettingsDivider()
+-            SettingActionRow("应用详情", "耗电管理、自启动与权限") { openAppDetails(context) }
+-            SettingsDivider()
+-            SettingActionRow("Shizuku 授权", shizukuStatus(state), onClick = onRequestShizuku)
+-            Text(
+-                "OPPower 只通过 Shizuku 读取和调整已确认的 ColorOS 充电项目；授权失败时会停止写入并恢复系统默认。",
+-                color = TextSecondary,
+-                fontSize = 9.sp,
+-                lineHeight = 15.sp,
+-                modifier = Modifier.padding(vertical = 9.dp),
+-            )
++            CouiDivider()
++            CouiRow("应用详情", value = "耗电管理与自启动", chevron = true) { openAppDetails(context) }
++            CouiDivider()
++            CouiRow("Shizuku 授权", value = shizukuStatus(state), chevron = true, onClick = onRequestShizuku)
+         }
+-        SettingsSection("诊断") {
+-            SettingSwitchRow(
++        CouiGroup("诊断") {
++            CouiSwitchRow(
+                 title = "调试模式",
+-                description = "显示运行状态、充电阶段与权限状态",
++                summary = "显示运行状态、充电阶段与权限状态",
+                 checked = state.settings.debugMode,
+                 onCheckedChange = { value -> onSettingsChange { it.copy(debugMode = value) } },
+             )
+             if (state.settings.debugMode) {
+-                SettingsDivider(Modifier.padding(vertical = 8.dp))
+-                DebugRow("当前状态", state.controllerStatus.phase.label)
+-                DebugRow("功率档", state.controllerStatus.desiredGear?.let(::friendlyPowerGear) ?: "等待启用")
+-                DebugRow("充电状态", if (state.battery.isCharging) "正在充电" else "未在充电")
+-                DebugRow("电源接入", if (state.battery.acOnline) "是" else "否")
+-                DebugRow("外部控制权限", if (state.shizukuPermission) "已授权" else "未授权")
++                CouiDivider()
++                CouiRow("当前状态", value = state.controllerStatus.phase.label)
++                CouiDivider()
++                CouiRow(
++                    "功率档",
++                    value = state.controllerStatus.desiredGear?.let(::friendlyPowerGear) ?: "等待启用",
++                )
++                CouiDivider()
++                CouiRow("充电状态", value = if (state.battery.isCharging) "正在充电" else "未在充电")
++                CouiDivider()
++                CouiRow("电源接入", value = if (state.battery.acOnline) "是" else "否")
++                CouiDivider()
++                CouiRow("外部控制权限", value = if (state.shizukuPermission) "已授权" else "未授权")
++                CouiDivider()
++                CouiRow("充电阶段", value = state.insight.stage.label)
++                CouiDivider()
++                CouiRow(
++                    "充电器协议",
++                    value = state.insight.capability?.protocolLabel ?: "未识别",
++                )
+             }
+         }
+-        SettingsSection("应用") {
+-            StatusRow("版本", BuildConfig.VERSION_NAME, true)
+-            SettingsDivider()
+-            StatusRow("设备", "RMX8899 · ColorOS 17", true)
+-            SettingsDivider()
+-            StatusRow("网络权限", "未申请，数据不上传", true)
++        CouiGroup("应用") {
++            CouiRow("版本", value = BuildConfig.VERSION_NAME)
++            CouiDivider()
++            CouiRow("设备", value = "RMX8899 · ColorOS 17")
++            CouiDivider()
++            CouiRow("网络权限", value = "未申请，数据不上传")
+         }
+     }
+ }
+@@ -654,44 +844,70 @@ private fun DataManagementPage(
+     onBack: () -> Unit,
+     onSettingsChange: ((RuntimeSettings) -> RuntimeSettings) -> Unit,
+     onClearHistory: () -> Unit,
++    onExportHistory: () -> Unit,
++    onResetSettings: () -> Unit,
+ ) {
+     val context = LocalContext.current
+     var confirmClear by remember { mutableStateOf(false) }
++    var confirmReset by remember { mutableStateOf(false) }
+     val storageBytes = remember(state.points) {
+-        context.filesDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
++        val files = context.filesDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
++        // The 24 h sample database lives in databases/, not files/.
++        val databases = context.getDatabasePath("chart-history-24h.db")
++        files + listOf(databases, java.io.File("${databases.path}-wal"), java.io.File("${databases.path}-shm"))
++            .sumOf { if (it.isFile) it.length() else 0L }
+     }
+-    SettingsPage("数据管理", "曲线、充放电记录与本地存储", onBack) {
+-        SettingsSection("存储占用") {
+-            StatusRow("本地数据", formatBytes(storageBytes), true)
+-            SettingsDivider()
+-            StatusRow("曲线采样点", "${state.points.size} 个", true)
+-            SettingsDivider()
+-            StatusRow("充电记录", "${state.chargeRecords.size} 条", true)
+-            SettingsDivider()
+-            StatusRow("放电记录", "${state.dischargeRecords.size} 条", true)
+-            Text(
+-                "原始曲线记录最多保存 24 小时。充电亮屏每 3 秒、充电熄屏每 5 秒、未充电每 180 秒采样，图表显示最近 8 小时。所有数据只保存在本机。",
+-                color = TextSecondary,
+-                fontSize = 9.sp,
+-                lineHeight = 15.sp,
+-                modifier = Modifier.padding(vertical = 11.dp),
+-            )
++    CouiPage("数据管理", "曲线、充放电记录与本地存储", onBack) {
++        CouiGroup(
++            title = "存储占用",
++            footer = "原始曲线记录最多保存 24 小时。充电亮屏每 3 秒、充电熄屏每 5 秒、未充电每 180 秒采样，" +
++                "图表显示最近 8 小时。所有数据只保存在本机。",
++        ) {
++            CouiRow("本地数据", value = formatBytes(storageBytes))
++            CouiDivider()
++            CouiRow("曲线采样点", value = "${state.points.size} 个")
++            CouiDivider()
++            CouiRow("充电记录", value = "${state.chargeRecords.size} 条")
++            CouiDivider()
++            CouiRow("放电记录", value = "${state.dischargeRecords.size} 条")
+         }
+-        SettingsSection("历史曲线") {
+-            SettingSwitchRow(
++        CouiGroup("历史曲线") {
++            CouiSwitchRow(
+                 title = "记录实时曲线",
+-                description = "关闭后停止新增采样，并移除现有曲线数据",
++                summary = "关闭后停止新增采样，并移除现有曲线数据",
+                 checked = state.settings.historyEnabled,
+                 onCheckedChange = { value -> onSettingsChange { it.copy(historyEnabled = value) } },
+             )
+-            SettingsDivider()
+-            SettingActionRow(
++            CouiDivider()
++            CouiRow(
++                title = "导出为 CSV",
++                summary = "导出最近 24 小时原始采样，可发给其他应用分析",
++                value = "导出",
++                valueColor = if (state.points.isEmpty()) TextSecondary else Cyan,
++                enabled = state.points.isNotEmpty(),
++                chevron = state.points.isNotEmpty(),
++                onClick = if (state.points.isEmpty()) null else onExportHistory,
++            )
++            CouiDivider()
++            CouiRow(
+                 title = "清除全部本地记录",
+                 value = if (state.points.isEmpty() && state.chargeRecords.isEmpty()) "暂无记录" else "清除",
++                valueColor = if (state.points.isEmpty()) TextSecondary else Danger,
+                 enabled = state.points.isNotEmpty() || state.chargeRecords.isNotEmpty(),
+                 onClick = { confirmClear = true },
+             )
+         }
++        CouiGroup(
++            title = "恢复默认",
++            footer = "只重置本应用的设置与显示偏好，不会改动系统充电项目。控制开关会一并关闭并恢复系统默认。",
++        ) {
++            CouiRow(
++                title = "重置全部设置",
++                value = "重置",
++                valueColor = Amber,
++                onClick = { confirmReset = true },
++            )
++        }
+     }
+     if (confirmClear) {
+         AlertDialog(
+@@ -707,51 +923,71 @@ private fun DataManagementPage(
+             dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("取消") } },
+         )
+     }
++    if (confirmReset) {
++        AlertDialog(
++            onDismissRequest = { confirmReset = false },
++            title = { Text("重置全部设置？") },
++            text = { Text("外观、通知、检测与硬件修正都会回到默认值，快充控制会关闭并恢复系统默认。本地记录不会被删除。") },
++            confirmButton = {
++                TextButton(onClick = {
++                    onResetSettings()
++                    confirmReset = false
++                }) { Text("重置", color = Danger) }
++            },
++            dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("取消") } },
++        )
++    }
+ }
+ 
+ private data class FaqEntry(val question: String, val answer: String)
+ 
+ @Composable
+ private fun FaqPage(onBack: () -> Unit) {
+-    var expanded by remember { mutableIntStateOf(0) }
++    var expanded by rememberSaveable { mutableStateOf(0) }
+     val entries = listOf(
+         FaqEntry("为什么手机显示功率和功率计不一致？", "界面显示的是系统提供的电池侧数据，功率计显示的是充电器输入端功率。链路损耗和手机自身耗电都会造成差异。"),
+         FaqEntry("为什么亮屏快充有时只维持十几瓦？", "系统会结合温度、电量、前台应用和充电策略动态限流。OPPower 能调整已验证的策略档位，但不会关闭原生温控。"),
+         FaqEntry("拔掉充电器后会恢复默认吗？", "会。控制服务检测到拔电后会恢复偏移。重新接电时再按当前规则开始。"),
+         FaqEntry("为什么设置已经开启却没有生效？", "请先确认系统控制权限、电池优化白名单和常驻服务状态。控制策略无法回读时，应用会主动恢复默认。"),
+         FaqEntry("充满后为什么会暂停增强？", "100% 后继续提高充电功率没有意义。应用会恢复偏移并暂停增强，重新拔插后才开始新会话。"),
+-        FaqEntry("隐藏后台任务会影响快充吗？", "不会。它只把主界面从最近任务中移除，常驻控制服务仍会运行。"),
++        FaqEntry("充电检测里的“效率”是什么？", "它把充入电量按 3.85 V 折算成能量，再与输入电能比较，包含线材与升压损耗，只适合横向比较，不是电芯库仑效率。"),
++        FaqEntry("为什么识别不到充电器功率？", "部分 ColorOS 版本不向 shell 暴露 voltage_max/current_max。此时只显示实际输入与阶段判断，不影响快充控制。"),
+         FaqEntry("曲线为什么每 15 分钟才标一个时间节点？", "图表默认显示 2 小时窗口，所以横轴按 15 分钟显示时间标签。实际采样与 LLPower 一致：充电亮屏 3 秒、充电熄屏 5 秒、未充电 180 秒。"),
+     )
+-    SettingsPage("常见问题", "功率、读数与后台运行", onBack) {
+-        entries.forEachIndexed { index, entry ->
+-            GlassPanel(
+-                modifier = Modifier.fillMaxWidth().clickable { expanded = if (expanded == index) -1 else index },
+-                tint = if (expanded == index) AccentSurface else Surface,
+-                accent = if (expanded == index) Cyan else Amber,
+-                highlighted = expanded == index,
+-                shape = RoundedCornerShape(13.dp),
+-                shadowElevation = if (expanded == index) 7.dp else 4.dp,
+-            ) {
+-                Column(Modifier.padding(14.dp)) {
++    CouiPage("常见问题", "功率、读数与后台运行", onBack) {
++        CouiGroup(title = "问答") {
++            entries.forEachIndexed { index, entry ->
++                if (index > 0) CouiDivider()
++                Column(
++                    Modifier
++                        .fillMaxWidth()
++                        .clickable { expanded = if (expanded == index) -1 else index }
++                        .padding(horizontal = Coui.rowPadding, vertical = Coui.contentPadding),
++                ) {
+                     Row(verticalAlignment = Alignment.CenterVertically) {
+-                        Text("Q${index + 1}", color = Cyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                         Text(
+                             entry.question,
+-                            color = TextPrimary,
+-                            fontSize = 12.sp,
+-                            fontWeight = FontWeight.Bold,
+-                            modifier = Modifier.weight(1f).padding(horizontal = 9.dp),
++                            style = Coui.itemTitle,
++                            color = if (expanded == index) Cyan else TextPrimary,
++                            modifier = Modifier.weight(1f),
++                        )
++                        Text(
++                            if (expanded == index) "−" else "+",
++                            color = TextSecondary,
++                            fontSize = 16.sp,
++                            modifier = Modifier.padding(start = 10.dp),
+                         )
+-                        Text(if (expanded == index) "−" else "+", color = TextSecondary, fontSize = 16.sp)
+                     }
+-                    if (expanded == index) {
++                    AnimatedVisibility(
++                        visible = expanded == index,
++                        enter = expandVertically(spring(stiffness = 420f)) + fadeIn(),
++                        exit = shrinkVertically(spring(stiffness = 420f)) + fadeOut(),
++                    ) {
+                         Text(
+                             entry.answer,
++                            style = Coui.itemSummary,
+                             color = TextSecondary,
+-                            fontSize = 10.sp,
+-                            lineHeight = 17.sp,
+-                            modifier = Modifier.padding(top = 10.dp),
++                            modifier = Modifier.padding(top = 8.dp),
+                         )
+                     }
+                 }
+@@ -766,60 +1002,71 @@ private fun AboutPage(
+     onNavigate: (SettingsScreen) -> Unit,
+     onJoinQq: () -> Unit,
+ ) {
+-    SettingsPage("关于 OPPower", "版本 ${BuildConfig.VERSION_NAME}", onBack) {
+-        GlassPanel(
+-            modifier = Modifier.fillMaxWidth(),
+-            shape = RoundedCornerShape(16.dp),
+-            tint = AccentSurface,
+-            accent = Cyan,
+-            highlighted = true,
+-            shadowElevation = 10.dp,
+-        ) {
+-            Column(Modifier.fillMaxWidth().padding(18.dp)) {
+-                Text("OPPower", color = TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.Black)
+-                Text("ColorOS 亮屏快充控制与电池监控", color = TextSecondary, fontSize = 11.sp, modifier = Modifier.padding(top = 3.dp))
+-                Text("基于 LLPower 二改得来", color = Amber, fontSize = 10.sp, modifier = Modifier.padding(top = 10.dp))
++    CouiPage("关于 OPPower", "版本 ${BuildConfig.VERSION_NAME}", onBack) {
++        CouiGroup {
++            Column(Modifier.fillMaxWidth().padding(20.dp)) {
++                Text("OPPower", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
++                Text(
++                    "ColorOS 亮屏快充控制、充电检测与电池趋势",
++                    style = Coui.itemSummary,
++                    color = TextSecondary,
++                    modifier = Modifier.padding(top = 4.dp),
++                )
++                Text(
++                    "基于 LLPower 二改得来",
++                    style = Coui.groupFooter,
++                    color = Amber,
++                    modifier = Modifier.padding(top = 12.dp),
++                )
+             }
+         }
+-        SettingsSection("项目") {
+-            StatusRow("版本", BuildConfig.VERSION_NAME, true)
+-            SettingsDivider()
+-            StatusRow("适用设备", "RMX8899 / ColorOS 17", true)
+-            SettingsDivider()
+-            StatusRow("网络与上传", "无网络权限，数据仅存本机", true)
++        CouiGroup("项目") {
++            CouiRow("版本", value = BuildConfig.VERSION_NAME)
++            CouiDivider()
++            CouiRow("适用设备", value = "RMX8899 / ColorOS 17")
++            CouiDivider()
++            CouiRow("网络与上传", value = "无网络权限，仅存本机")
+         }
+-        SettingsSection("说明与许可") {
+-            SettingActionRow("重要说明", "使用边界与风险") { onNavigate(SettingsScreen.IMPORTANT_NOTICE) }
+-            SettingsDivider()
+-            SettingActionRow("开发者说明", "来源与反馈方式") { onNavigate(SettingsScreen.DEVELOPER_NOTICE) }
+-            SettingsDivider()
+-            SettingActionRow("开源许可", "第三方组件与许可证") { onNavigate(SettingsScreen.LICENSES) }
+-        }
+-        SettingsSection("反馈") {
+-            SettingActionRow("OPPower 用户群", QQ_GROUP_NUMBER, onClick = onJoinQq)
+-            Text(
+-                "点击后会复制群号并尝试打开 QQ 群邀请链接。",
+-                color = TextSecondary,
+-                fontSize = 9.sp,
+-                modifier = Modifier.padding(bottom = 11.dp),
++        CouiGroup("说明与许可") {
++            CouiRow(
++                title = "重要说明",
++                value = "使用边界与风险",
++                chevron = true,
++                onClick = { onNavigate(SettingsScreen.IMPORTANT_NOTICE) },
++            )
++            CouiDivider()
++            CouiRow(
++                title = "开发者说明",
++                value = "来源与反馈",
++                chevron = true,
++                onClick = { onNavigate(SettingsScreen.DEVELOPER_NOTICE) },
+             )
++            CouiDivider()
++            CouiRow(
++                title = "开源许可",
++                value = "第三方组件",
++                chevron = true,
++                onClick = { onNavigate(SettingsScreen.LICENSES) },
++            )
++        }
++        CouiGroup(title = "反馈", footer = "点击后会复制群号并尝试打开 QQ 群邀请链接。") {
++            CouiRow("OPPower 用户群", value = QQ_GROUP_NUMBER, chevron = true, onClick = onJoinQq)
+         }
+     }
+ }
+ 
+ @Composable
+ private fun NoticePage(title: String, onBack: () -> Unit, paragraphs: List<String>) {
+-    SettingsPage(title, "OPPower", onBack) {
+-        SettingsSection("说明") {
++    CouiPage(title, "OPPower", onBack) {
++        CouiGroup("说明") {
+             paragraphs.forEachIndexed { index, paragraph ->
+                 Text(
+                     paragraph,
++                    style = Coui.itemSummary,
+                     color = TextSecondary,
+-                    fontSize = 11.sp,
+-                    lineHeight = 19.sp,
+-                    modifier = Modifier.padding(vertical = 9.dp),
++                    modifier = Modifier.padding(horizontal = Coui.rowPadding, vertical = 12.dp),
+                 )
+-                if (index != paragraphs.lastIndex) SettingsDivider()
++                if (index != paragraphs.lastIndex) CouiDivider()
+             }
+         }
+     }
+@@ -833,288 +1080,116 @@ private fun LicensesPage(onBack: () -> Unit) {
+         "Shizuku API" to "Apache License 2.0",
+         "Material Components" to "Apache License 2.0",
+     )
+-    SettingsPage("开源许可", "本项目使用的第三方组件", onBack) {
+-        SettingsSection("第三方组件") {
+-            licenses.forEachIndexed { index, (name, license) ->
+-                StatusRow(name, license, true)
+-                if (index != licenses.lastIndex) SettingsDivider()
+-            }
+-            Text(
+-                "各组件版权与完整许可证归原作者所有。源码仓库会保留对应依赖声明和许可信息。",
+-                color = TextSecondary,
+-                fontSize = 9.sp,
+-                lineHeight = 15.sp,
+-                modifier = Modifier.padding(vertical = 11.dp),
+-            )
+-        }
+-    }
+-}
+-
+-@Composable
+-private fun SettingsPage(
+-    title: String,
+-    subtitle: String,
+-    onBack: () -> Unit,
+-    content: @Composable ColumnScope.() -> Unit,
+-) {
+-    GlassBackdrop {
+-        Column(
+-            Modifier
+-                .fillMaxSize()
+-                .windowInsetsPadding(WindowInsets.safeDrawing)
+-                .verticalScroll(rememberScrollState())
+-                .padding(horizontal = 14.dp, vertical = 10.dp),
+-            verticalArrangement = Arrangement.spacedBy(10.dp),
++    CouiPage("开源许可", "本项目使用的第三方组件", onBack) {
++        CouiGroup(
++            title = "第三方组件",
++            footer = "各组件版权与完整许可证归原作者所有。源码仓库会保留对应依赖声明和许可信息。",
+         ) {
+-            Row(verticalAlignment = Alignment.CenterVertically) {
+-                GlassPanel(
+-                    shape = CircleShape,
+-                    tint = SurfaceRaised,
+-                    shadowElevation = 7.dp,
+-                    modifier = Modifier.clickable(onClick = onBack),
+-                ) {
+-                    Text("‹", color = TextPrimary, fontSize = 28.sp, modifier = Modifier.padding(horizontal = 11.dp, vertical = 2.dp))
+-                }
+-                Column(Modifier.padding(start = 11.dp)) {
+-                    Text(title, color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+-                    Text(subtitle, color = TextSecondary, fontSize = 10.sp, modifier = Modifier.padding(top = 2.dp))
+-                }
++            licenses.forEachIndexed { index, (name, license) ->
++                CouiRow(name, value = license)
++                if (index != licenses.lastIndex) CouiDivider()
+             }
+-            content()
+-            Spacer(Modifier.height(16.dp))
+         }
+-    }
+-}
+-
+-@Composable
+-private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+-    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+-        Text(title, color = TextSecondary, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
+-        GlassPanel(
+-            shape = RoundedCornerShape(16.dp),
+-            tint = Surface,
+-            accent = Cyan,
+-            shadowElevation = 8.dp,
++        CouiGroup(
++            title = "界面规范",
++            footer = "界面度量参考 COUI-Kit（MPL 2.0）公开的 ColorOS 17 布局规范独立实现，" +
++                "未引入该库的二进制依赖，也不代表与原厂存在隶属关系。",
+         ) {
+-            Column(Modifier.fillMaxWidth(), content = content)
+-        }
+-    }
+-}
+-
+-@Composable
+-private fun SettingsMenuRow(
+-    icon: String,
+-    title: String,
+-    summary: String,
+-    accent: Boolean = false,
+-    onClick: () -> Unit,
+-) {
+-    Row(
+-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 11.dp, vertical = 8.dp),
+-        verticalAlignment = Alignment.CenterVertically,
+-    ) {
+-        SettingsGlyph(icon, accent)
+-        Column(Modifier.weight(1f).padding(horizontal = 11.dp)) {
+-            Text(title, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+-            Text(summary, color = if (accent) Amber else TextSecondary, fontSize = 9.sp, modifier = Modifier.padding(top = 2.dp))
++            CouiRow("设计参考", value = "COUI-Kit · MPL 2.0")
+         }
+-        Text("›", color = TextSecondary, fontSize = 18.sp)
+     }
+ }
+ 
+ @Composable
+-private fun SettingsGlyph(icon: String, warm: Boolean) {
+-    GlassPanel(
+-        tint = when {
+-            warm -> AmberSurface
+-            icon == "◐" -> Color(0xFF24262D)
+-            icon == "◎" || icon == "⌁" -> Color(0xFF26271F)
+-            else -> AccentSurface
++private fun CouiStatusRow(title: String, value: String, ok: Boolean, warn: Boolean = false) {
++    CouiRow(
++        title = title,
++        value = value,
++        valueColor = if (ok) Cyan else if (warn) Amber else Danger,
++        leading = {
++            CouiStatusDot(ok = ok, warn = warn)
++            Spacer(Modifier.padding(end = 10.dp))
+         },
+-        accent = if (warm) Amber else Cyan,
+-        highlighted = warm,
+-        shape = RoundedCornerShape(10.dp),
+-        shadowElevation = 5.dp,
+-    ) {
+-        Box(Modifier.size(31.dp), contentAlignment = Alignment.Center) {
+-            Text(
+-                icon,
+-                color = when {
+-                    warm -> Amber
+-                    icon == "◐" -> Color(0xFFB9BFD4)
+-                    icon == "◎" || icon == "⌁" -> Amber
+-                    else -> Cyan
+-                },
+-                fontSize = 14.sp,
+-                fontWeight = FontWeight.Bold,
+-            )
+-        }
+-    }
+-}
+-
+-@Composable
+-private fun SettingSwitchRow(
+-    title: String,
+-    description: String,
+-    checked: Boolean,
+-    onCheckedChange: (Boolean) -> Unit,
+-) {
+-    Row(Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+-        Column(Modifier.weight(1f)) {
+-            Text(title, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+-            if (description.isNotBlank()) {
+-                Text(description, color = TextSecondary, fontSize = 9.sp, lineHeight = 14.sp, modifier = Modifier.padding(top = 2.dp))
+-            }
+-        }
+-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+-    }
+-}
+-
+-@Composable
+-private fun SettingActionRow(
+-    title: String,
+-    value: String,
+-    enabled: Boolean = true,
+-    onClick: () -> Unit,
+-) {
+-    Row(
+-        Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick).padding(horizontal = 11.dp, vertical = 11.dp),
+-        verticalAlignment = Alignment.CenterVertically,
+-    ) {
+-        Column(Modifier.weight(1f)) {
+-            Text(title, color = if (enabled) TextPrimary else TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+-            if (value.isNotBlank()) {
+-                Text(value, color = if (enabled) Cyan else TextSecondary, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 2.dp))
+-            }
+-        }
+-        Text(" ›", color = TextSecondary, fontSize = 13.sp)
+-    }
+-}
+-
+-@Composable
+-private fun StatusRow(title: String, value: String, good: Boolean) {
+-    Row(Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+-        Box(Modifier.size(7.dp).background(if (good) Cyan else Amber, CircleShape))
+-        Text(title, color = TextPrimary, fontSize = 11.sp, modifier = Modifier.weight(1f).padding(start = 9.dp))
+-        Text(value, color = if (good) Cyan else Amber, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+-    }
+-}
+-
+-@Composable
+-private fun DebugRow(label: String, value: String) {
+-    Row(Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 5.dp)) {
+-        Text(label, color = TextSecondary, fontSize = 9.sp, modifier = Modifier.weight(1f))
+-        Text(value, color = TextPrimary, fontSize = 9.sp)
+-    }
+-}
+-
+-@Composable
+-private fun SettingLabel(text: String) {
+-    Text(text, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 9.dp, bottom = 2.dp))
+-}
+-
+-@Composable
+-private fun <T> ChoiceGrid(
+-    options: List<T>,
+-    selected: T,
+-    label: (T) -> String,
+-    onSelect: (T) -> Unit,
+-    columns: Int = 3,
+-) {
+-    Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+-        options.chunked(columns).forEach { rowOptions ->
+-            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+-                rowOptions.forEach { option ->
+-                    val isSelected = option == selected
+-                    GlassPanel(
+-                        modifier = Modifier.weight(1f).clickable { onSelect(option) },
+-                        tint = if (isSelected) AccentSurface else SurfaceRaised,
+-                        accent = if (isSelected) Cyan else Outline,
+-                        highlighted = isSelected,
+-                        shape = RoundedCornerShape(9.dp),
+-                        shadowElevation = if (isSelected) 7.dp else 4.dp,
+-                    ) {
+-                        Box(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
+-                            Text(
+-                            label(option),
+-                            color = if (isSelected) Cyan else TextPrimary,
+-                            fontSize = 9.sp,
+-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+-                            maxLines = 1,
+-                        )
+-                        }
+-                    }
+-                }
+-                repeat(columns - rowOptions.size) { Spacer(Modifier.weight(1f)) }
+-            }
+-        }
+-    }
+-}
+-
+-@Composable
+-private fun SettingsDivider(modifier: Modifier = Modifier) {
+-    HorizontalDivider(modifier = modifier.padding(horizontal = 11.dp), color = Outline)
+-}
+-
+-private fun fontSizeLabel(scale: Float): String = when {
+-    scale < 0.95f -> "较小字号"
+-    scale > 1.05f -> "较大字号"
+-    else -> "标准字号"
++    )
+ }
+ 
+ private fun usesLiveNotificationChannel(): Boolean = Build.VERSION.SDK_INT >= 36
+ 
+ private fun openNotificationSettings(context: Context) {
+-    context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+-        putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+-    })
++    runCatching {
++        context.startActivity(
++            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
++                .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
++                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
++        )
++    }.onFailure {
++        runCatching {
++            context.startActivity(
++                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
++                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
++            )
++        }
++    }
+ }
+ 
+ private fun openBatteryOptimizationSettings(context: Context) {
+     runCatching {
+-        context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
++        context.startActivity(
++            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
++                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
++        )
+     }.onFailure { openAppDetails(context) }
+ }
+ 
+ private fun openAppDetails(context: Context) {
+-    context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+-        data = Uri.parse("package:${context.packageName}")
+-    })
++    runCatching {
++        context.startActivity(
++            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
++                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
++        )
++    }
+ }
+ 
+ private fun openOverlayPermission(context: Context) {
+-    context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+-        data = Uri.parse("package:${context.packageName}")
+-    })
++    runCatching {
++        context.startActivity(
++            Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))
++                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
++        )
++    }
+ }
+ 
+-private fun hardwareSummary(settings: RuntimeSettings): String {
+-    val enabled = listOf(
+-        settings.invertCurrentSign,
+-        settings.doubleCellCorrection,
+-        settings.virtualVoltage,
+-        settings.absoluteCurrentPowerDisplay,
+-    ).count { it }
+-    return if (enabled == 0) "电池读数修正" else "已启用 $enabled 项读数修正"
+-}
++private fun hardwareSummary(settings: RuntimeSettings): String = buildList {
++    if (settings.invertCurrentSign) add("电流已反向")
++    if (settings.doubleCellCorrection) add("双芯合并")
++    if (settings.virtualVoltage) add("虚拟电压")
++    if (settings.absoluteCurrentPowerDisplay) add("绝对值显示")
++}.joinToString(" · ").ifEmpty { "默认读数，无需修正" }
+ 
+ private fun shizukuStatus(state: UiState): String = when {
+-    !state.shizukuInstalled -> "未安装 · 打开下载页"
+-    !state.shizukuAvailable -> "未运行 · 打开 Shizuku"
+-    !state.shizukuPermission -> "未授权 · 授权给 OPPower"
+-    state.shizukuServiceConnected -> "已授权 OPPower · 特权服务已连接"
+-    else -> "已授权 OPPower · 特权服务连接中"
++    !state.shizukuInstalled -> "未安装 Shizuku"
++    !state.shizukuAvailable -> "Shizuku 未运行"
++    !state.shizukuPermission -> "尚未授权 OPPower"
++    state.shizukuServiceConnected -> "已授权并连接"
++    else -> "已授权，等待服务连接"
+ }
+ 
+ private fun friendlyPowerGear(gear: Int): String = when (gear) {
+-    0 -> "最高能力"
+-    1, 2 -> "快速充电 · 高功率"
+-    3, 4 -> "快速充电 · 均衡"
+-    else -> "温和充电"
++    0 -> "最大输出"
++    in 1..4 -> "20–40 W · 档 $gear"
++    5 -> "10–30 W · 档 $gear"
++    else -> "档 $gear"
+ }
+ 
+ private fun formatBytes(bytes: Long): String = when {
+-    bytes < 1_024 -> "$bytes B"
+-    bytes < 1_024 * 1_024 -> String.format(Locale.getDefault(), "%.1f KB", bytes / 1_024f)
+-    else -> String.format(Locale.getDefault(), "%.1f MB", bytes / (1_024f * 1_024f))
++    bytes >= 1L shl 20 -> String.format(Locale.getDefault(), "%.1f MB", bytes / 1048576f)
++    bytes >= 1L shl 10 -> String.format(Locale.getDefault(), "%.0f KB", bytes / 1024f)
++    else -> "$bytes B"
++}
++
++/** 供主页面复用的充电阶段着色，避免两处不一致。 */
++internal fun ChargeStage.accentColor(): androidx.compose.ui.graphics.Color = when (this) {
++    ChargeStage.CONSTANT_CURRENT, ChargeStage.FULL -> Cyan
++    ChargeStage.CONSTANT_VOLTAGE, ChargeStage.TRICKLE, ChargeStage.HANDSHAKE -> Amber
++    ChargeStage.DISCONNECTED, ChargeStage.DISCHARGING -> TextSecondary
+ }
+diff --git a/app/src/main/java/com/oppower/ui/MainPage.kt b/app/src/main/java/com/oppower/ui/MainPage.kt
+index bbae04d..af73302 100644
+--- a/app/src/main/java/com/oppower/ui/MainPage.kt
++++ b/app/src/main/java/com/oppower/ui/MainPage.kt
+@@ -88,6 +88,7 @@ internal fun MainPage(
+     state: State<UiState>,
+     onOpenChargeSettings: () -> Unit,
+     onOpenSettings: () -> Unit,
++    onOpenDetectSettings: () -> Unit = onOpenSettings,
+     onRequestShizuku: () -> Unit,
+     onSettingsChange: ((RuntimeSettings) -> RuntimeSettings) -> Unit,
+     onJoinQq: () -> Unit,
+@@ -100,6 +101,7 @@ internal fun MainPage(
+     val pointsState = remember(state) { derivedStateOf { state.value.points } }
+     val chargeRecordsState = remember(state) { derivedStateOf { state.value.chargeRecords } }
+     val dischargeRecordsState = remember(state) { derivedStateOf { state.value.dischargeRecords } }
++    val insightState = remember(state) { derivedStateOf { state.value.insight } }
+     val shizukuAccessState = remember(state) {
+         derivedStateOf { state.value.shizukuAvailable to state.value.shizukuPermission }
+     }
+@@ -266,6 +268,21 @@ internal fun MainPage(
+             }
+         }
+ 
++        item(key = "charge-detect") {
++            val settings by settingsState
++            val insight by insightState
++            if (settings.chargeDetectEnabled) {
++                Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
++                    SectionHeader("充电检测", insight.stage.label)
++                    ChargeDetectCard(
++                        insight = insight,
++                        settings = settings,
++                        onOpenSettings = onOpenDetectSettings,
++                    )
++                }
++            }
++        }
++
+         item(key = "quick-control") {
+             val settings by settingsState
+             val controllerStatus by controllerStatusState
+@@ -387,18 +404,28 @@ internal fun MainPage(
+     }
+ }
+ 
++/**
++ * 分区标题沿用 COUI 的组标题规范：12sp 中等字重、次要色、与卡片左缘内缩对齐，
++ * 右侧只放一句最短的状态说明，不再用彩色竖条抢主视觉。
++ */
+ @Composable
+ private fun SectionHeader(title: String, trailing: String) {
+-    Row(Modifier.fillMaxWidth().padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+-        Box(Modifier.width(2.dp).height(15.dp).background(Cyan.copy(alpha = 0.75f), RoundedCornerShape(2.dp)))
++    Row(
++        Modifier
++            .fillMaxWidth()
++            .padding(start = 20.dp, end = 20.dp, top = 6.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
+         Text(
+             title,
+-            color = TextPrimary,
+-            fontWeight = FontWeight.Bold,
+-            fontSize = 14.sp,
+-            modifier = Modifier.weight(1f).padding(start = 7.dp),
++            color = TextSecondary,
++            fontWeight = FontWeight.Medium,
++            fontSize = 12.sp,
++            modifier = Modifier.weight(1f),
+         )
+-        Text(trailing, color = TextSecondary, fontSize = 9.sp)
++        if (trailing.isNotBlank()) {
++            Text(trailing, color = TextSecondary.copy(alpha = 0.75f), fontSize = 11.sp)
++        }
+     }
+ }
+ 
+diff --git a/app/src/main/java/com/oppower/ui/MainViewModel.kt b/app/src/main/java/com/oppower/ui/MainViewModel.kt
+index 2395672..0175512 100644
+--- a/app/src/main/java/com/oppower/ui/MainViewModel.kt
++++ b/app/src/main/java/com/oppower/ui/MainViewModel.kt
+@@ -10,6 +10,8 @@ import android.view.accessibility.AccessibilityManager
+ import androidx.lifecycle.AndroidViewModel
+ import androidx.lifecycle.viewModelScope
+ import com.oppower.battery.BatteryReader
++import com.oppower.battery.ChargeInsight
++import com.oppower.battery.ChargeInspector
+ import com.oppower.controller.ChargingController
+ import com.oppower.data.PreferencesStore
+ import com.oppower.history.ChargeRecordAccumulator
+@@ -30,6 +32,7 @@ import com.oppower.model.toControlTier
+ import com.oppower.service.ChargeControlBus
+ import com.oppower.service.ChargeControlService
+ import com.oppower.service.StatusNotificationChannels
++import com.oppower.service.shouldRecordHistory
+ import com.oppower.shizuku.ShizukuGateway
+ import kotlinx.coroutines.CancellationException
+ import kotlinx.coroutines.Dispatchers
+@@ -57,6 +60,7 @@ data class UiState(
+     val shizukuServiceConnected: Boolean = false,
+     val systemAccess: SystemAccessState = SystemAccessState(),
+     val showIntro: Boolean = false,
++    val insight: ChargeInsight = ChargeInsight(),
+ )
+ 
+ class MainViewModel(application: Application) : AndroidViewModel(application) {
+@@ -69,6 +73,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
+     private val historyWriteInFlight = AtomicBoolean(false)
+     @Volatile private var historyLoaded = false
+     private var currentSessionAccumulator: ChargeRecordAccumulator? = null
++
++    // 充电检测的滚动窗口：约五分钟的功率与电量样本，足够算稳定性与斜率，
++    // 又不会让每次刷新都重算整段历史。
++    private val detectPowerWindow = ArrayDeque<Float>()
++    private val detectLevelWindow = ArrayDeque<Pair<Long, Int>>()
++    private var pluggedAtMillis: Long? = null
++    private var lastAcOnline: Boolean? = null
++    private var powerSupplyDump: String? = null
++    private var lastDumpAtMillis = 0L
+     private val mutable = MutableStateFlow(
+         UiState(
+             settings = store.load(),
+@@ -111,6 +124,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
+             }
+         }
+ 
++        startDetectionLoop()
++
+         viewModelScope.launch {
+             ChartHistoryBus.points.collectLatest { points ->
+                 if (!historyLoaded) return@collectLatest
+@@ -166,7 +181,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
+                                     status = ChargeControlBus.status.value,
+                                 ),
+                             )
+-                            if (!sharedIsFresh && settings.historyEnabled &&
++                            if (!sharedIsFresh && shouldRecordHistory(settings) &&
+                                 historyWriteInFlight.compareAndSet(false, true)
+                             ) {
+                                 viewModelScope.launch(Dispatchers.IO) {
+@@ -310,6 +325,97 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
+         ChargeControlService.restore(getApplication())
+     }
+ 
++    /**
++     * 充电检测循环。只在页面可见、检测开关开启且已接电时读取 power_supply 快照，
++     * 与 1 秒遥测解耦，避免为展示信息增加 Shizuku 往返。
++     */
++    private fun startDetectionLoop() {
++        viewModelScope.launch {
++            pageVisible.collectLatest { visible ->
++                if (!visible) {
++                    ChargeControlBus.pageVisible = false
++                    return@collectLatest
++                }
++                ChargeControlBus.pageVisible = true
++                while (isActive) {
++                    val settings = mutable.value.settings
++                    if (settings.chargeDetectEnabled) {
++                        runCatching { refreshInsight(settings) }
++                            .onFailure { android.util.Log.w("OPPower", "Charge detection failed", it) }
++                    }
++                    delay(settings.detectionIntervalSeconds.coerceIn(3, 60) * 1_000L)
++                }
++            }
++        }
++    }
++
++    private suspend fun refreshInsight(settings: RuntimeSettings) {
++        val battery = mutable.value.battery
++        val now = System.currentTimeMillis()
++        if (lastAcOnline != battery.acOnline) {
++            lastAcOnline = battery.acOnline
++            pluggedAtMillis = if (battery.acOnline) now else null
++            detectPowerWindow.clear()
++            detectLevelWindow.clear()
++        }
++        if (battery.acOnline) {
++            detectPowerWindow.addLast(battery.powerW)
++            detectLevelWindow.addLast(now to battery.levelPercent)
++            while (detectPowerWindow.size > 30) detectPowerWindow.removeFirst()
++            while (detectLevelWindow.size > 40) detectLevelWindow.removeFirst()
++        }
++        val interval = settings.detectionIntervalSeconds.coerceIn(3, 60) * 1_000L
++        if (battery.acOnline && now - lastDumpAtMillis >= interval) {
++            lastDumpAtMillis = now
++            val dump = withContext(Dispatchers.IO) { shizuku.readPowerSupplyDump() }
++            if (dump != null) powerSupplyDump = dump
++        }
++        val session = currentSessionAccumulator?.takeIf { it.sampleCount >= 2 }?.toRecord()
++        val insight = ChargeInspector.analyze(
++            dump = powerSupplyDump.orEmpty(),
++            acOnline = battery.acOnline,
++            levelPercent = battery.levelPercent,
++            currentMa = battery.currentMa,
++            voltageMv = battery.voltageMv,
++            powerW = battery.powerW,
++            batteryTempC = battery.temperatureC,
++            batteryStatus = battery.status,
++            pluggedForMillis = pluggedAtMillis?.let { now - it },
++            recentPower = detectPowerWindow.toList(),
++            recentLevels = detectLevelWindow.toList(),
++            doubleCell = settings.doubleCellCorrection,
++            sessionChargeMah = session?.chargeDeltaMah,
++            sessionAveragePowerW = session?.averagePowerW,
++            sessionMinutes = session?.let { (it.endedAtMillis - it.startedAtMillis) / 60_000f },
++        )
++        mutable.value = mutable.value.copy(insight = insight)
++        ChargeControlBus.insight.value = insight
++    }
++
++    /** 导出最近 24 小时采样为 CSV，返回可分享的缓存文件。 */
++    suspend fun exportHistoryCsv(): java.io.File? = withContext(Dispatchers.IO) {
++        runCatching {
++            val dir = java.io.File(getApplication<Application>().cacheDir, "export").apply { mkdirs() }
++            val target = java.io.File(dir, "oppower-history.csv")
++            historyStore.exportCsv(target)
++            target.takeIf { it.length() > 0L }
++        }.onFailure {
++            android.util.Log.w("OPPower", "History export failed", it)
++        }.getOrNull()
++    }
++
++    /** 恢复默认设置，并让服务执行一次安全恢复。 */
++    fun resetSettings() {
++        store.resetAll()
++        val defaults = store.load()
++        mutable.value = mutable.value.copy(settings = defaults, insight = ChargeInsight())
++        powerSupplyDump = null
++        detectPowerWindow.clear()
++        detectLevelWindow.clear()
++        ChargeControlService.controlSettingsChanged(getApplication())
++        ChargeControlBus.requestUpdate()
++    }
++
+     fun clearHistory() {
+         currentSessionAccumulator = null
+         historySignature = ""
+diff --git a/app/src/main/java/com/oppower/ui/OPPowerApp.kt b/app/src/main/java/com/oppower/ui/OPPowerApp.kt
+index f129172..85d4ce9 100644
+--- a/app/src/main/java/com/oppower/ui/OPPowerApp.kt
++++ b/app/src/main/java/com/oppower/ui/OPPowerApp.kt
+@@ -19,9 +19,13 @@ import androidx.compose.runtime.setValue
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.platform.LocalContext
+ import androidx.compose.ui.text.font.FontWeight
++import androidx.core.content.FileProvider
++import androidx.lifecycle.viewModelScope
++import kotlinx.coroutines.launch
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
+ import com.oppower.model.RuntimeSettings
++import com.oppower.model.UiDensity
+ 
+ private enum class Page {
+     MAIN,
+@@ -38,7 +42,10 @@ fun OPPowerApp(
+     onRestore: () -> Unit,
+     onDismissIntro: () -> Unit,
+     onClearHistory: () -> Unit,
++    onExportHistory: suspend () -> java.io.File?,
++    onResetSettings: () -> Unit,
+ ) {
++    val scope = androidx.compose.runtime.rememberCoroutineScope()
+     var page by rememberSaveable { mutableStateOf(Page.MAIN) }
+     var settingsScreen by rememberSaveable { mutableStateOf(SettingsScreen.HOME) }
+     val context = LocalContext.current
+@@ -55,54 +62,86 @@ fun OPPowerApp(
+         }
+     }
+ 
+-    // A direct switch avoids rendering two full pages during transitions. On
+-    // long, scrollable pages the crossfade created duplicate layout and drawing
+-    // work, which appeared as a visible hitch on the device.
+-    when (page) {
+-        Page.MAIN -> MainPage(
++    // 密度开关在根布局注入一次，设置页切换后立刻对全部页面生效。
++    ProvideCouiMetrics(compact = state.value.settings.uiDensity == UiDensity.COMPACT) {
++        // A direct switch avoids rendering two full pages during transitions. On
++        // long, scrollable pages the crossfade created duplicate layout and drawing
++        // work, which appeared as a visible hitch on the device.
++        when (page) {
++            Page.MAIN -> MainPage(
++                state = state,
++                onOpenChargeSettings = { page = Page.CHARGE_SETTINGS },
++                onOpenSettings = {
++                    settingsScreen = SettingsScreen.HOME
++                    page = Page.SETTINGS
++                },
++                onOpenDetectSettings = {
++                    settingsScreen = SettingsScreen.CHARGE_DETECT
++                    page = Page.SETTINGS
++                },
++                onRequestShizuku = onRequestShizuku,
++                onSettingsChange = onSettingsChange,
++                onJoinQq = { joinQqGroup(context) },
++            )
++
++            Page.CHARGE_SETTINGS -> ChargeSettingsPage(
++                state = state.value,
++                onBack = { page = Page.MAIN },
++                onSettingsChange = onSettingsChange,
++                onRestore = onRestore,
++                onRequestShizuku = onRequestShizuku,
++                onReadGear = onReadGear,
++            )
++
++            Page.SETTINGS -> SettingsRouter(
++                screen = settingsScreen,
++                state = state.value,
++                onNavigate = { settingsScreen = it },
++                onBack = {
++                    if (settingsScreen == SettingsScreen.HOME) {
++                        page = Page.MAIN
++                    } else {
++                        settingsScreen = if (settingsScreen.isAboutChild()) SettingsScreen.ABOUT else SettingsScreen.HOME
++                    }
++                },
++                onSettingsChange = onSettingsChange,
++                onJoinQq = { joinQqGroup(context) },
++                onClearHistory = onClearHistory,
++                onRequestShizuku = onRequestShizuku,
++                onExportHistory = {
++                    scope.launch {
++                        val file = onExportHistory() ?: return@launch
++                        shareCsv(context, file)
++                    }
++                },
++                onResetSettings = onResetSettings,
++            )
++        }
++
++        FirstRunHost(
+             state = state,
+-            onOpenChargeSettings = { page = Page.CHARGE_SETTINGS },
+-            onOpenSettings = {
+-                settingsScreen = SettingsScreen.HOME
+-                page = Page.SETTINGS
+-            },
+-            onRequestShizuku = onRequestShizuku,
+-            onSettingsChange = onSettingsChange,
++            onDismiss = onDismissIntro,
+             onJoinQq = { joinQqGroup(context) },
+         )
++    }
++}
+ 
+-        Page.CHARGE_SETTINGS -> ChargeSettingsPage(
+-            state = state.value,
+-            onBack = { page = Page.MAIN },
+-            onSettingsChange = onSettingsChange,
+-            onRestore = onRestore,
+-            onRequestShizuku = onRequestShizuku,
+-            onReadGear = onReadGear,
+-        )
+-
+-        Page.SETTINGS -> SettingsRouter(
+-            screen = settingsScreen,
+-            state = state.value,
+-            onNavigate = { settingsScreen = it },
+-            onBack = {
+-                if (settingsScreen == SettingsScreen.HOME) {
+-                    page = Page.MAIN
+-                } else {
+-                    settingsScreen = if (settingsScreen.isAboutChild()) SettingsScreen.ABOUT else SettingsScreen.HOME
+-                }
++private fun shareCsv(context: android.content.Context, file: java.io.File) {
++    runCatching {
++        val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
++        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
++            type = "text/csv"
++            putExtra(android.content.Intent.EXTRA_STREAM, uri)
++            putExtra(android.content.Intent.EXTRA_SUBJECT, "OPPower 24 小时充电曲线")
++            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
++            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
++        }
++        context.startActivity(
++            android.content.Intent.createChooser(intent, "导出 OPPower 数据").apply {
++                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+             },
+-            onSettingsChange = onSettingsChange,
+-            onJoinQq = { joinQqGroup(context) },
+-            onClearHistory = onClearHistory,
+-            onRequestShizuku = onRequestShizuku,
+         )
+     }
+-
+-    FirstRunHost(
+-        state = state,
+-        onDismiss = onDismissIntro,
+-        onJoinQq = { joinQqGroup(context) },
+-    )
+ }
+ 
+ @Composable
+diff --git a/docs/VALIDATION.md b/docs/VALIDATION.md
+index 5e255d6..1c42c1f 100644
+--- a/docs/VALIDATION.md
++++ b/docs/VALIDATION.md
+@@ -447,3 +447,74 @@ Thermal Levels 写入验证：
+ - 最新 Debug APK 位于 `app/build/outputs/apk/debug/app-debug.apk`，大小 11,140,888 bytes，SHA-256 为 `777777FEE0532576C0C738F6333D532B05784BAE757D8FB75A97F984DDD978D6`。本小节的构建信息取代上一小节同一未归档 beta27 的旧 APK 大小/哈希记录。
+ - 2026-11-23 通过 `192.168.10.7:43693` 覆盖安装到 RMX8899。安装后 SharedPreferences 回读为 `master_enabled=false`、`native_level_zero_enabled=true`、`screen_off_boost_enabled=false`、`live_notification=true`，正是“总开关关、只开保活”的目标组合。
+ - 验收时设备未接电（AC/USB 均未连接，电量约 70%），因此尚未观察到真实 `setChargingLevel 0` 下发和功率变化；不能据此宣称固定瓦数提升。接电后仍需确认服务启动、保活命令、息屏开关、关闭保活/一键恢复的 `2` 级恢复，以及 3 秒轮询的实际稳定性。
++
++## beta28 待定：控制稳定性与耗电复核（2026-11-23）
++
++- 修复服务生命周期崩溃风险：`syncStatusNotification` 在关闭最后一个充电开关时会移除前台通知，却没有清除本地 `foregroundStarted` 标记。下一轮控制周期再次 `startForeground()` 时 Android 12+ 会抛出 `ForegroundServiceStartNotAllowedException`，使控制循环永久丢帧。现在通知只在前台服务确实需要展示时才更新，移除时统一复位标记。
++- 修复“最后一个开关关闭时安全恢复失败”分支：原实现会在没有前台通知的情况下 `startControlLoop()`，而 `onStartCommand` 返回 `START_NOT_STICKY`，进程被回收后安全恢复即中断。现在该分支先以“正在恢复系统默认”重新进入前台，再保留重试。
++- 控制循环空闲退避：所有充电增强开关关闭（仅保留通知）时不再每秒读取电池、评估控制器并触发 `settings` 子进程，改为 1 秒周期的纯等待，任何设置变更、屏幕事件或接电广播仍会立即唤醒。
++- 安全恢复重试增加息屏条件：`setChargingLevel 2` 恢复失败时，只在亮屏期间每秒重试；息屏后暂停重试，亮屏后立即恢复。避免整夜每秒一次 Binder + dumpsys 唤醒。
++- 曲线记录与会话绑定：曲线采样只在总开关或高功率保活开启时写入。此前关闭全部控制后，服务仍会为“实时通知”每 180 秒唤醒并写库，与“关闭控制即停止采样”的文档描述不一致。
++- 电流零值纠错窗口由 5.0 秒改回文档约定的 3.5 秒；单测中原本显式传入 3.5 秒，默认值一直未被覆盖。
++- 冷启动与 Shizuku 重连：`ShizukuGateway` 注册 `addBinderReceivedListenerSticky` 与 `addBinderDeadListener`，授权授予或 Shizuku 重启后立即重新绑定 user service，不再依赖下一次“命令触发绑定”。
++- 设置页“本地数据”占用统计补入 `databases/chart-history-24h.db` 及 WAL/SHM 文件；此前只统计 `files/`，导致 24 小时采样库不计入。
++- 热控正则表达式提升为 `companion object` 常量，避免每秒控制周期重复编译正则。
++- 本轮验证：`:app:compileDebugKotlin`、`:app:testDebugUnitTest`（76 项，0 failure / 0 error）、`:app:lintDebug`、`:app:assembleRelease`（R8 混淆通过，Shizuku 反射类保留规则有效）均通过。以上为代码级回归，仍需在 RMX8899 上复验：接电后连续开关切换、关闭最后一个开关时的安全恢复、息屏 30 分钟后 `dumpsys batterystats` 的唤醒次数。
++
++## beta29：充电检测、COUI 界面规范与设置扩展（2026-11-23）
++
++本轮是三项需求的合并交付：充电检测参照 Scene 的信息分层、界面参照 [COUI-Kit](https://github.com/ItosEO/COUI-Kit) 的 ColorOS 17 度量、设置页在「每项必须真实接上功能」的前提下扩容。
++
++### 充电检测（`battery/ChargeInspector.kt`）
++
++- 数据来源为 `sysfs/power_supply` 只读快照，经 Shizuku user service 新增的白名单命令 `readPowerSupplyDump()` 一次性取回 `battery/usb/main/charger/pc_port/wired/wireless/otg` 各节点的 `voltage_max`、`current_max`、`charge_full`、`charge_full_design`、`cycle_count`、`temp`、`usb_type`、`online` 等字段。**只读**，不写任何节点。
++- 解析层 `PowerSupplyDump.parse()` 采用 `[dir] name` + `k=v` 行格式，坏行只丢弃该行，不影响整包；`normalizeMicro()` 按量级把 µV/µA/µAh 归一化到 mV/mA/mAh，避免不同机型单位差异造成 1000 倍误差。
++- 信息分层刻意对齐 Scene：界面第一层是「充得多快」，第二层「为什么慢」，第三层才是「电池健康」。电量、电压、电流、功率四个大字指标在最上，协议、阶段、预计充满在其下；充电器能力与利用率单独成行，用来说明「当前 18 W 是充电器只给 18 W，还是给了 66 W 但手机只用 18 W」。
++- 充电阶段判定：`HANDSHAKE`（刚插入、电流未稳定）→ `CONSTANT_CURRENT`（恒流，电压未到阈值）→ `CONSTANT_VOLTAGE`（电压达到 4.36 V，双芯按 2 倍换算）→ `TRICKLE`（电流 < 150 mA 且电量 ≥ 95%）→ `FULL` / `DISCONNECTED`。
++- 预计充满时间用斜率法：取最近若干采样电量增量的中位数换算成 %/min；低于 0.05 %/min 时不估算，直接说明「电流过小，无法预估」，不编造数字。
++- 稳定性评分用采样窗口内电流的变异系数映射为 0–100 百分比，用于区分「功率波动是快充协商在跳档」还是「线材/接口接触不良」。
++- 效率估算按 2% 线损折算，仅作量级参考，界面文案明确标注为估算值。
++- 异常归因 `summarizeAnomalies()` 覆盖：充电器能力充足但实际功率偏低（利用率 < 35%）、温度偏高（≥ 42 ℃）、电压达恒压阈值后仍在拉大电流、协议为普通 USB 但电流异常高、电池健康度 < 80% 等。
++- **双读互斥**：检测数据在前台由 ViewModel 读、息屏由服务读。`ChargeControlBus.pageVisible` 保证界面可见时服务侧跳过检测，避免同一秒内两次 Shizuku 调用。
++- 检测间隔 3/5/10/20/30 秒可选，异常提醒与充满提醒是两个独立通知通道（`ALERT_NOTIFICATION_ID = 2109`），不复用主状态通知。
++- 单元测试 `ChargeInspectorTest` 新增 14 项，覆盖解析健壮性、协议识别、健康度、阶段判定、剩余时间、稳定性、效率与异常归因。
++
++### 界面：COUI 度量独立实现（`ui/CouiUi.kt`）
++
++- COUI-Kit 的 AAR 在 `AarMetadata` 中要求 `compileSdk 37.1`、`minAgpVersion 9.1.0`、Kotlin 2.4.20、Compose 1.13 与 `minSdk 31`，而本项目基线是 AGP 8.10.1 / SDK 36 / Kotlin 2.1.21 / minSdk 26。直接引入会导致整个工程升级到尚不稳定的工具链，因此选择**按公开度量独立实现等价组件**，而不是引入二进制依赖。
++- `Coui` 度量令牌覆盖：页面左右 16dp、行内 16dp、行高 48dp、卡片 24dp 连续圆角、分隔线 0.33dp、组标题与脚注内缩 32dp、开关 44×24 配 18dp 滑块与 3dp 边距、分段选择器 38dp。
++- 组件集：`CouiPage`、`CouiCard`、`CouiGroup`、`CouiRow`、`CouiDivider`、`CouiSwitchRow`、`CouiSwitch`、`CouiSegmented`、`CouiChoiceRow`、`CouiSearchField`、`CouiStatusDot`、`CouiPageHeader`。
++- 开关带触感反馈（`HapticFeedbackType.TextHandleMove`）与弹簧动画（`dampingRatio = 0.72`）；分段指示器跟手插值，点击即提交，不做二次确认。
++- 主页面分组标题同步改为 COUI 组标题样式（12sp Medium / 次要色 / 内缩 20dp），去掉原来的彩色竖条，与设置页保持同一视觉语言。
++- 许可页新增「界面规范：COUI-Kit · MPL 2.0」署名。
++
++### 设置扩展（每项均真实接入）
++
++| 新增项 | 接入位置 | 实际行为 |
++| --- | --- | --- |
++| 设置搜索 | `SettingsHomePage` | 按标题、摘要与 `keywords` 过滤 5 个分组，空结果给出提示 |
++| 充电检测开关 | `MainViewModel.refreshInsight` / 服务 `maybeRunDetection` | 关闭后不再读取 `power_supply`，检测卡片隐藏 |
++| 检测间隔 | 同上 | 3–30 秒真实改变服务与前台刷新节奏 |
++| 异常提醒 | `ChargeControlService.postAlert` | 命中异常时发独立通道通知，同一次异常不重复轰炸 |
++| 充满提醒 | 同上 | 进入 `FULL` 后发一次提醒 |
++| 显示电池健康 | `ChargeDetectCard` | 控制健康度区段显隐 |
++| 通知样式 | `notificationBatteryData` | 三档裁剪通知内容：极简只留电量 / 标准加功率 / 详细加温度与阶段 |
++| 列表密度 | `ProvideCouiMetrics` → `LocalCouiMetrics` | 紧凑 42dp + 字号收一档，对全部页面生效 |
++| 导出为 CSV | `ChartHistoryStore.exportCsv` + FileProvider | 24 小时曲线写 `cache/export/`，经 `ACTION_SEND` 分享；带二次确认 |
++| 重置全部设置 | `PreferencesStore.resetAll` + `controlSettingsChanged` | 恢复默认值并保留首次引导已读标记；带二次确认 |
++
++界面密度通过 `CompositionLocal` 在根布局注入一次，设置一改全页立即生效，无需重启 Activity。
++
++### 本机构建验证
++
++- `:app:testDebugUnitTest`：**90 项通过，0 failure / 0 error / 0 skipped**（beta28 基线 76 项 + `ChargeInspectorTest` 14 项）。
++- `:app:lintDebug`：**0 errors, 20 warnings, 1 hint**；warning 均为存量项（`SmallSp`、`allowBackup` 弃用、KTX 建议等），本轮未新增 lint 分类。
++- `:app:assembleRelease`：R8 混淆通过，Shizuku 反射类保留规则仍有效。产物 `app/build/outputs/apk/release/app-release-unsigned.apk`，大小 1,654,666 bytes，SHA-256 `2A9832F677EB6AA33DDE28F7B8141BECF3B45930DF43ED74A5F5FF02156148A2`。
++
++### 仍需真机复验
++
++- `power_supply` 各字段在 RMX8899 上的实际可读性与单位量级，尤其是 `charge_full` / `charge_full_design` 与 `cycle_count` 是否存在。
++- 充电阶段判定阈值（4.36 V 恒压点、150 mA 涓流门限）在该机型上的实际表现。
++- 预计充满时间的斜率估算在真实充电过程中的误差范围。
++- 检测间隔导致的 Shizuku 调用频率对续航的影响（建议对比 5 秒与 30 秒两档的 `dumpsys batterystats`）。
++- 新界面在深色/浅色、六套配色与三档列表密度下的实际渲染效果。
+diff --git a/app/src/main/java/com/oppower/battery/ChargeInspector.kt b/app/src/main/java/com/oppower/battery/ChargeInspector.kt
+new file mode 100644
+index 0000000..c8e3743
+--- /dev/null
++++ b/app/src/main/java/com/oppower/battery/ChargeInspector.kt
+@@ -0,0 +1,424 @@
++package com.oppower.battery
++
++/**
++ * `power_supply` 节点的只读快照。字段名与内核 sysfs 一致，便于对照
++ * `/sys/class/power_supply/<name>/<field>` 手工校验。
++ */
++data class PowerSupplyNode(
++    val name: String,
++    val values: Map<String, String>,
++) {
++    val type: String get() = values["type"].orEmpty().lowercase()
++
++    fun text(key: String): String? = values[key]?.takeIf { it.isNotBlank() }
++
++    fun long(key: String): Long? = values[key]?.trim()?.toLongOrNull()
++
++    fun int(key: String): Int? = long(key)?.toInt()
++
++    /** sysfs 的 `online` 只表示电气连接，不代表正在进电。 */
++    val online: Boolean get() = int("online") == 1
++}
++
++/**
++ * 解析特权进程返回的多节点文本。格式刻意保持简单，任何一行损坏都只丢弃该行，
++ * 不会让整次检测失败：
++ *
++ * ```
++ * [dir] usb
++ * online=1
++ * voltage_max=11000000
++ * ```
++ */
++object PowerSupplyDump {
++    private const val DIR_PREFIX = "[dir] "
++
++    fun parse(raw: String): List<PowerSupplyNode> {
++        val nodes = mutableListOf<PowerSupplyNode>()
++        var currentName: String? = null
++        var currentValues = LinkedHashMap<String, String>()
++
++        fun flush() {
++            val name = currentName ?: return
++            if (currentValues.isNotEmpty()) nodes += PowerSupplyNode(name, currentValues)
++            currentValues = LinkedHashMap()
++        }
++
++        raw.lineSequence().forEach { line ->
++            when {
++                line.startsWith(DIR_PREFIX) -> {
++                    flush()
++                    currentName = line.removePrefix(DIR_PREFIX).trim().takeIf { it.isNotEmpty() }
++                }
++                else -> {
++                    val index = line.indexOf('=')
++                    if (index <= 0) return@forEach
++                    val key = line.substring(0, index).trim()
++                    val value = line.substring(index + 1).trim()
++                    if (key.isNotEmpty() && value.length <= 64) currentValues[key] = value
++                }
++            }
++        }
++        flush()
++        return nodes
++    }
++}
++
++/** 充电器对外宣称的能力，来自 `voltage_max`/`current_max`。 */
++data class ChargerCapability(
++    val supplyName: String,
++    val supplyType: String,
++    val protocolLabel: String,
++    val maxVoltageMv: Int,
++    val maxCurrentMa: Int,
++    val maxPowerW: Float,
++) {
++    val isFastCharge: Boolean get() = maxPowerW >= 15f
++
++    val label: String
++        get() = when {
++            maxPowerW >= 1f -> "${protocolLabel} · ${maxVoltageMv / 1000f}V/${maxCurrentMa / 1000f}A"
++            else -> protocolLabel
++        }
++}
++
++/** 电池设计容量与当前满充容量，用来估算健康度。 */
++data class BatteryHealth(
++    val designMah: Int,
++    val fullMah: Int,
++    val cycleCount: Int?,
++    val temperatureC: Float?,
++) {
++    val percent: Int?
++        get() = if (designMah in 1..30_000 && fullMah in 1..30_000) {
++            (fullMah * 100L / designMah).toInt().coerceIn(0, 130)
++        } else {
++            null
++        }
++}
++
++enum class ChargeStage(val label: String) {
++    DISCONNECTED("未接电"),
++    HANDSHAKE("协商中"),
++    CONSTANT_CURRENT("恒流快充"),
++    CONSTANT_VOLTAGE("恒压收尾"),
++    TRICKLE("涓流补电"),
++    FULL("已充满"),
++    DISCHARGING("放电中"),
++}
++
++/**
++ * 一次充电检测的完整结论。所有字段都由纯函数从 [PowerSupplyNode] 与采样点算出，
++ * 便于在没有真机的情况下做单元测试。
++ */
++data class ChargeInsight(
++    val capability: ChargerCapability? = null,
++    val health: BatteryHealth? = null,
++    val stage: ChargeStage = ChargeStage.DISCONNECTED,
++    val stageDetail: String = "",
++    val inputPowerW: Float = 0f,
++    val utilizationPercent: Int? = null,
++    val minutesToFull: Int? = null,
++    val stabilityPercent: Int = 100,
++    val anomalies: List<String> = emptyList(),
++    val chargeMahThisSession: Int? = null,
++    val efficiencyPercent: Int? = null,
++    val hasData: Boolean = false,
++) {
++    val isHealthy: Boolean get() = anomalies.isEmpty()
++}
++
++/**
++ * 充电检测。参考 Scene 充电统计的信息分层：先看“充得多快”，再看“为什么慢”，
++ * 最后给电池健康与稳定性。判定阈值全部集中在本文件，便于按机型调整。
++ */
++object ChargeInspector {
++    /** 单芯恒压阈值；双芯机型由调用方把阈值翻倍。 */
++    const val CV_THRESHOLD_MV = 4_360
++    const val TRICKLE_CURRENT_MA = 150
++    const val HANDSHAKE_WINDOW_MS = 20_000L
++    const val MIN_STABLE_SAMPLES = 6
++    const val HIGH_TEMPERATURE_C = 42f
++    const val MAX_PLAUSIBLE_CURRENT_MA = 15_000
++    const val MIN_UTILIZATION_PERCENT = 35
++
++    fun analyze(
++        dump: String,
++        acOnline: Boolean,
++        levelPercent: Int,
++        currentMa: Int,
++        voltageMv: Int,
++        powerW: Float,
++        batteryTempC: Float,
++        batteryStatus: Int,
++        pluggedForMillis: Long?,
++        recentPower: List<Float> = emptyList(),
++        recentLevels: List<Pair<Long, Int>> = emptyList(),
++        doubleCell: Boolean = false,
++        sessionChargeMah: Int? = null,
++        sessionAveragePowerW: Float? = null,
++        sessionMinutes: Float? = null,
++    ): ChargeInsight {
++        val nodes = PowerSupplyDump.parse(dump)
++        val capability = detectCharger(nodes)
++        val health = detectHealth(nodes)
++        val stage = detectStage(
++            acOnline = acOnline,
++            levelPercent = levelPercent,
++            currentMa = currentMa,
++            voltageMv = voltageMv,
++            batteryStatus = batteryStatus,
++            pluggedForMillis = pluggedForMillis,
++            doubleCell = doubleCell,
++        )
++        val utilization = capability?.takeIf { it.maxPowerW >= 1f }?.let { cap ->
++            if (!acOnline) null else ((powerW.coerceAtLeast(0f) / cap.maxPowerW) * 100f).toInt().coerceIn(0, 200)
++        }
++        val minutes = estimateMinutesToFull(levelPercent, recentLevels)
++        val stability = stabilityPercent(recentPower)
++        val anomalies = summarizeAnomalies(
++            acOnline = acOnline,
++            stage = stage,
++            levelPercent = levelPercent,
++            currentMa = currentMa,
++            powerW = powerW,
++            capability = capability,
++            utilizationPercent = utilization,
++            batteryTempC = batteryTempC,
++            stability = stability,
++            recentLevels = recentLevels,
++        )
++        val efficiency = chargeEfficiency(
++            chargeMah = sessionChargeMah,
++            averagePowerW = sessionAveragePowerW,
++            minutes = sessionMinutes,
++            cellVoltageV = 3.85f,
++        )
++        return ChargeInsight(
++            capability = capability,
++            health = health,
++            stage = stage,
++            stageDetail = stageDetail(stage, capability, levelPercent, currentMa),
++            inputPowerW = if (acOnline) powerW.coerceAtLeast(0f) else 0f,
++            utilizationPercent = utilization,
++            minutesToFull = minutes,
++            stabilityPercent = stability,
++            anomalies = anomalies,
++            chargeMahThisSession = sessionChargeMah,
++            efficiencyPercent = efficiency,
++            hasData = nodes.isNotEmpty() || acOnline,
++        )
++    }
++
++    /** 只保留电气上真正供电的节点，避免把 `battery` 自身当成充电器。 */
++    fun detectCharger(nodes: List<PowerSupplyNode>): ChargerCapability? {
++        val charger = nodes
++            .filter { it.type !in BATTERY_TYPES && it.type.isNotEmpty() }
++            .filter { it.online || it.long("voltage_max") != null }
++            .maxByOrNull { capabilityPowerW(it) }
++            ?: return null
++        val voltageMv = normalizeMicro(charger.long("voltage_max") ?: charger.long("voltage_now") ?: 0L)
++        val currentMa = normalizeMicro(charger.long("current_max") ?: charger.long("input_current_limit") ?: 0L)
++        val maxPowerW = if (voltageMv > 0 && currentMa > 0) {
++            voltageMv / 1000f * currentMa / 1000f
++        } else {
++            0f
++        }
++        return ChargerCapability(
++            supplyName = charger.name,
++            supplyType = charger.type,
++            protocolLabel = protocolLabel(charger, voltageMv),
++            maxVoltageMv = voltageMv,
++            maxCurrentMa = currentMa,
++            maxPowerW = maxPowerW,
++        )
++    }
++
++    fun detectHealth(nodes: List<PowerSupplyNode>): BatteryHealth? {
++        val battery = nodes.firstOrNull { it.type in BATTERY_TYPES || it.name == "battery" } ?: return null
++        val design = normalizeMicro(battery.long("charge_full_design") ?: 0L)
++        val full = normalizeMicro(battery.long("charge_full") ?: 0L)
++        if (design <= 0 && full <= 0) return null
++        return BatteryHealth(
++            designMah = design,
++            fullMah = full,
++            cycleCount = battery.int("cycle_count"),
++            temperatureC = battery.long("temp")?.let { it / 10f },
++        )
++    }
++
++    fun detectStage(
++        acOnline: Boolean,
++        levelPercent: Int,
++        currentMa: Int,
++        voltageMv: Int,
++        batteryStatus: Int,
++        pluggedForMillis: Long?,
++        doubleCell: Boolean = false,
++    ): ChargeStage {
++        if (!acOnline) return ChargeStage.DISCONNECTED
++        if (levelPercent >= 100 || batteryStatus == BATTERY_STATUS_FULL) return ChargeStage.FULL
++        val threshold = if (doubleCell) CV_THRESHOLD_MV * 2 else CV_THRESHOLD_MV
++        val current = kotlin.math.abs(currentMa)
++        if (current < TRICKLE_CURRENT_MA && levelPercent >= 95) return ChargeStage.TRICKLE
++        if (voltageMv >= threshold) return ChargeStage.CONSTANT_VOLTAGE
++        if (pluggedForMillis != null && pluggedForMillis in 0..HANDSHAKE_WINDOW_MS) {
++            return ChargeStage.HANDSHAKE
++        }
++        return ChargeStage.CONSTANT_CURRENT
++    }
++
++    /**
++     * 用最近几分钟的电量斜率外推。斜率取相邻增量的中位数，能抵抗单帧跳变；
++     * 斜率过小（<0.05 %/min）时不估算，避免给出几百分钟的假精度。
++     */
++    fun estimateMinutesToFull(
++        levelPercent: Int,
++        recentLevels: List<Pair<Long, Int>>,
++    ): Int? {
++        if (levelPercent >= 100) return null
++        if (recentLevels.size < 3) return null
++        val ordered = recentLevels.sortedBy { it.first }
++        val deltas = ordered.zipWithNext().mapNotNull { (left, right) ->
++            val minutes = (right.first - left.first) / 60_000f
++            if (minutes <= 0f || minutes > 30f) null else (right.second - left.second) / minutes
++        }.filter { it > 0f }
++        if (deltas.size < 2) return null
++        val slope = deltas.sorted()[deltas.size / 2]
++        if (slope < 0.05f) return null
++        val remaining = (100 - levelPercent) / slope
++        return remaining.toInt().coerceIn(1, 600)
++    }
++
++    /** 最近功率的变异系数转成稳定性百分比；样本不足时返回满分。 */
++    fun stabilityPercent(recentPower: List<Float>): Int {
++        if (recentPower.size < MIN_STABLE_SAMPLES) return 100
++        val values = recentPower.map { it.coerceAtLeast(0f) }
++        val mean = values.average().toFloat()
++        if (mean < 0.5f) return 100
++        val variance = values.sumOf { ((it - mean) * (it - mean)).toDouble() } / values.size
++        val cv = kotlin.math.sqrt(variance).toFloat() / mean
++        return (100f - cv * 120f).toInt().coerceIn(0, 100)
++    }
++
++    /**
++     * 充入电量与输入电能的比值。输入按平均功率积分，输出按 3.85 V 标称电压折算，
++     * 因此结果包含线损与升压损耗，只用于横向比较，不宣称是电芯库仑效率。
++     */
++    fun chargeEfficiency(
++        chargeMah: Int?,
++        averagePowerW: Float?,
++        minutes: Float?,
++        cellVoltageV: Float = 3.85f,
++    ): Int? {
++        if (chargeMah == null || averagePowerW == null || minutes == null) return null
++        if (chargeMah <= 0 || averagePowerW <= 1f || minutes <= 1f) return null
++        val outputWh = chargeMah / 1000f * cellVoltageV
++        val inputWh = averagePowerW * minutes / 60f
++        if (inputWh <= 0f) return null
++        return ((outputWh / inputWh) * 100f).toInt().coerceIn(1, 100)
++    }
++
++    private fun summarizeAnomalies(
++        acOnline: Boolean,
++        stage: ChargeStage,
++        levelPercent: Int,
++        currentMa: Int,
++        powerW: Float,
++        capability: ChargerCapability?,
++        utilizationPercent: Int?,
++        batteryTempC: Float,
++        stability: Int,
++        recentLevels: List<Pair<Long, Int>>,
++    ): List<String> = buildList {
++        if (!acOnline) return@buildList
++        if (stage != ChargeStage.FULL && kotlin.math.abs(currentMa) < 30 && levelPercent < 99) {
++            add("已接电但电流接近 0，检查充电器握手或线材")
++        }
++        if (stability < 70) add("功率波动较大，稳定性 $stability%")
++        if (capability != null && capability.isFastCharge &&
++            utilizationPercent != null && utilizationPercent < MIN_UTILIZATION_PERCENT &&
++            stage != ChargeStage.TRICKLE && stage != ChargeStage.FULL
++        ) {
++            add("充电器支持 ${capability.maxPowerW.toInt()} W，当前只有 ${powerW.toInt()} W")
++        }
++        if (batteryTempC >= HIGH_TEMPERATURE_C) {
++            add("电池 ${batteryTempC.toInt()}°C，接近降档阈值")
++        }
++        if (kotlin.math.abs(currentMa) > MAX_PLAUSIBLE_CURRENT_MA) {
++            add("电流读数 ${currentMa} mA 超出合理范围，检查硬件修正")
++        }
++        if (recentLevels.size >= 4) {
++            val ordered = recentLevels.sortedBy { it.first }
++            val first = ordered.first().second
++            val last = ordered.last().second
++            if (last < first && stage != ChargeStage.FULL) add("充电中电量下降，可能存在取电大于输入")
++        }
++    }
++
++    private fun stageDetail(
++        stage: ChargeStage,
++        capability: ChargerCapability?,
++        levelPercent: Int,
++        currentMa: Int,
++    ): String = when (stage) {
++        ChargeStage.DISCONNECTED -> "等待接入电源"
++        ChargeStage.HANDSHAKE -> "正在与充电器协商电压与电流"
++        ChargeStage.CONSTANT_CURRENT ->
++            "大电流恒流阶段 · ${kotlin.math.abs(currentMa)} mA"
++        ChargeStage.CONSTANT_VOLTAGE -> "电池接近满压，电流开始收敛"
++        ChargeStage.TRICKLE -> "涓流补电，功率会持续下降"
++        ChargeStage.FULL -> "已充满 · 建议拔电或交给系统维护"
++        ChargeStage.DISCHARGING -> "使用电池供电"
++    }.let { detail ->
++        capability?.let { "$detail · 充电器 ${it.protocolLabel}" } ?: detail
++    }
++
++    private fun protocolLabel(node: PowerSupplyNode, maxVoltageMv: Int): String {
++        val usbType = node.text("usb_type")?.uppercase()
++            ?: node.text("real_type")?.uppercase()
++            ?: node.text("scope")?.uppercase()
++        when {
++            usbType == null -> Unit
++            usbType.contains("PPS") -> return "USB PD PPS"
++            usbType.contains("PD") -> return "USB PD"
++            usbType.contains("DCP") -> return "USB DCP"
++            usbType.contains("HVDCP") || usbType.contains("QC") -> return "QC 快充"
++            usbType.contains("CDP") -> return "USB CDP"
++            usbType.contains("SDP") -> return "USB SDP"
++            usbType.contains("VOOC") || usbType.contains("SVOOC") -> return "SVOOC 超级闪充"
++        }
++        val name = node.name.lowercase()
++        if (name.contains("wireless")) return "无线充电"
++        if (node.type == "mains") return "有线充电器"
++        return when {
++            maxVoltageMv >= 20_000 -> "高压快充 20V"
++            maxVoltageMv >= 11_000 -> "高压快充 11V"
++            maxVoltageMv >= 9_000 -> "快充 9V"
++            maxVoltageMv in 4_000..5_500 -> "普通 5V"
++            else -> "未知协议"
++        }
++    }
++
++    private fun capabilityPowerW(node: PowerSupplyNode): Float {
++        val voltageMv = normalizeMicro(node.long("voltage_max") ?: node.long("voltage_now") ?: 0L)
++        val currentMa = normalizeMicro(node.long("current_max") ?: node.long("input_current_limit") ?: 0L)
++        return if (voltageMv > 0 && currentMa > 0) voltageMv / 1000f * currentMa / 1000f else 0f
++    }
++
++    /**
++     * sysfs 里的电压/电流/容量可能以微单位上报（µV、µA、µAh），也可能已经是
++     * 毫单位。只按量级判断，不使用固定单位假设。
++     */
++    internal fun normalizeMicro(raw: Long): Int {
++        if (raw <= 0L) return 0
++        return when {
++            raw > 100_000_000L -> (raw / 1_000_000L).toInt()
++            raw > 100_000L -> (raw / 1_000L).toInt()
++            else -> raw.toInt()
++        }
++    }
++
++    private val BATTERY_TYPES = setOf("battery")
++    private const val BATTERY_STATUS_FULL = 5
++}
+diff --git a/app/src/main/java/com/oppower/ui/ChargeDetectPanel.kt b/app/src/main/java/com/oppower/ui/ChargeDetectPanel.kt
+new file mode 100644
+index 0000000..d4a7ce0
+--- /dev/null
++++ b/app/src/main/java/com/oppower/ui/ChargeDetectPanel.kt
+@@ -0,0 +1,297 @@
++package com.oppower.ui
++
++import androidx.compose.animation.AnimatedVisibility
++import androidx.compose.animation.core.animateFloatAsState
++import androidx.compose.animation.core.spring
++import androidx.compose.animation.expandVertically
++import androidx.compose.animation.fadeIn
++import androidx.compose.animation.fadeOut
++import androidx.compose.animation.shrinkVertically
++import androidx.compose.foundation.Canvas
++import androidx.compose.foundation.background
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.shape.CircleShape
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.geometry.Offset
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.graphics.StrokeCap
++import androidx.compose.ui.graphics.drawscope.Stroke
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import com.oppower.battery.ChargeInsight
++import com.oppower.battery.ChargeStage
++import com.oppower.model.RuntimeSettings
++
++/**
++ * 充电检测卡片。
++ *
++ * 信息分层参考 Scene 的充电统计：先回答“现在充得多快”，再回答“为什么不是更快”，
++ * 最后补电池健康。默认只显示四个最有决策价值的指标，其余折叠，避免主页面变成仪表盘。
++ */
++@Composable
++internal fun ChargeDetectCard(
++    insight: ChargeInsight,
++    settings: RuntimeSettings,
++    onOpenSettings: () -> Unit,
++    modifier: Modifier = Modifier,
++) {
++    var expanded by remember { mutableStateOf(false) }
++    val stageColor = when (insight.stage) {
++        ChargeStage.CONSTANT_CURRENT -> Cyan
++        ChargeStage.CONSTANT_VOLTAGE, ChargeStage.TRICKLE -> Amber
++        ChargeStage.FULL -> Cyan
++        ChargeStage.HANDSHAKE -> Amber
++        ChargeStage.DISCONNECTED, ChargeStage.DISCHARGING -> TextSecondary
++    }
++    CouiGroup(title = "充电检测") {
++        Column(Modifier.fillMaxWidth().padding(horizontal = Coui.rowPadding, vertical = 14.dp)) {
++            Row(verticalAlignment = Alignment.CenterVertically) {
++                Column(Modifier.weight(1f)) {
++                    Text(
++                        when {
++                            !insight.hasData -> "—"
++                            insight.stage == ChargeStage.DISCONNECTED -> "未接电"
++                            else -> "${insight.inputPowerW.oneDecimal()}"
++                        },
++                        style = TextStyleHuge,
++                        color = TextPrimary,
++                    )
++                    Text(
++                        when {
++                            insight.stage == ChargeStage.DISCONNECTED -> "接电后自动识别充电器"
++                            else -> "电池侧输入功率"
++                        },
++                        style = Coui.groupFooter,
++                        color = TextSecondary,
++                    )
++                }
++                StageChip(label = insight.stage.label, color = stageColor)
++            }
++
++            Spacer(Modifier.height(12.dp))
++            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
++                CouiMetric(
++                    label = "充电器",
++                    value = insight.capability?.let { "${it.maxPowerW.toInt()} W" } ?: "—",
++                    detail = insight.capability?.protocolLabel ?: "未识别",
++                    modifier = Modifier.weight(1f),
++                )
++                CouiMetric(
++                    label = "预计充满",
++                    value = insight.minutesToFull?.let(::formatMinutes) ?: "—",
++                    detail = if (insight.minutesToFull == null) "等待样本" else "按当前斜率",
++                    modifier = Modifier.weight(1f),
++                )
++                CouiMetric(
++                    label = "稳定性",
++                    value = "${insight.stabilityPercent}%",
++                    detail = stabilityLabel(insight.stabilityPercent),
++                    modifier = Modifier.weight(1f),
++                )
++            }
++
++            if (insight.anomalies.isNotEmpty()) {
++                Spacer(Modifier.height(12.dp))
++                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
++                    insight.anomalies.take(if (expanded) 4 else 2).forEach { text ->
++                        Row(verticalAlignment = Alignment.Top) {
++                            Box(
++                                Modifier
++                                    .padding(top = 6.dp)
++                                    .size(5.dp)
++                                    .clip(CircleShape)
++                                    .background(Amber),
++                            )
++                            Text(
++                                text,
++                                style = Coui.itemSummary,
++                                color = Amber,
++                                modifier = Modifier.padding(start = 8.dp),
++                            )
++                        }
++                    }
++                }
++            }
++
++            AnimatedVisibility(
++                visible = expanded,
++                enter = expandVertically(spring(stiffness = 380f)) + fadeIn(),
++                exit = shrinkVertically(spring(stiffness = 380f)) + fadeOut(),
++            ) {
++                Column {
++                    Spacer(Modifier.height(10.dp))
++                    CouiDivider(startIndent = 0.dp, endIndent = 0.dp)
++                    DetailRow("当前阶段", insight.stageDetail)
++                    insight.utilizationPercent?.let {
++                        DetailRow("充电器利用率", "$it%")
++                    }
++                    insight.chargeMahThisSession?.let {
++                        DetailRow("本次充入", "$it mAh")
++                    }
++                    insight.efficiencyPercent?.let {
++                        DetailRow("估算效率", "$it% · 含线损与升压损耗")
++                    }
++                    if (settings.showBatteryHealth) {
++                        insight.health?.let { health ->
++                            DetailRow(
++                                "电池健康",
++                                health.percent?.let { "$it% · ${health.fullMah} / ${health.designMah} mAh" }
++                                    ?: "读数不足",
++                            )
++                            health.cycleCount?.let { DetailRow("循环次数", "$it 次") }
++                        }
++                    }
++                    insight.capability?.let { cap ->
++                        DetailRow(
++                            "充电器能力",
++                            "${cap.maxVoltageMv / 1000f} V / ${cap.maxCurrentMa / 1000f} A · ${cap.supplyName}",
++                        )
++                    }
++                }
++            }
++
++            Row(
++                Modifier
++                    .fillMaxWidth()
++                    .padding(top = 12.dp)
++                    .clip(RoundedCornerShape(12.dp))
++                    .clickable { expanded = !expanded }
++                    .padding(vertical = 4.dp),
++                verticalAlignment = Alignment.CenterVertically,
++            ) {
++                Text(
++                    if (expanded) "收起详情" else "查看详情",
++                    style = Coui.itemSummary,
++                    color = Cyan,
++                    modifier = Modifier.weight(1f),
++                )
++                Text(
++                    if (expanded) "⌃" else "⌄",
++                    color = Cyan,
++                    fontSize = 14.sp,
++                )
++                Spacer(Modifier.width(14.dp))
++                Text(
++                    "检测设置",
++                    style = Coui.itemSummary,
++                    color = TextSecondary,
++                    modifier = Modifier.clickable(onClick = onOpenSettings),
++                )
++            }
++        }
++    }
++}
++
++@Composable
++private fun StageChip(label: String, color: Color) {
++    Row(
++        Modifier
++            .clip(CircleShape)
++            .background(color.copy(alpha = 0.14f))
++            .padding(horizontal = 12.dp, vertical = 6.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        val pulse by animateFloatAsState(
++            targetValue = 1f,
++            animationSpec = spring(stiffness = 200f),
++            label = "stage-pulse",
++        )
++        Canvas(Modifier.size(6.dp)) { drawCircle(color = color.copy(alpha = 0.4f + 0.6f * pulse)) }
++        Text(
++            label,
++            color = color,
++            fontSize = 12.sp,
++            fontWeight = FontWeight.Medium,
++            modifier = Modifier.padding(start = 6.dp),
++        )
++    }
++}
++
++@Composable
++private fun CouiMetric(label: String, value: String, detail: String, modifier: Modifier = Modifier) {
++    Column(
++        modifier
++            .clip(RoundedCornerShape(16.dp))
++            .background(Outline.copy(alpha = 0.20f))
++            .padding(horizontal = 10.dp, vertical = 9.dp),
++    ) {
++        Text(label, fontSize = 11.sp, color = TextSecondary)
++        Text(
++            value,
++            fontSize = 17.sp,
++            fontWeight = FontWeight.SemiBold,
++            color = TextPrimary,
++            modifier = Modifier.padding(top = 2.dp),
++        )
++        Text(
++            detail,
++            fontSize = 10.sp,
++            color = TextSecondary.copy(alpha = 0.85f),
++            maxLines = 1,
++        )
++    }
++}
++
++@Composable
++private fun DetailRow(label: String, value: String) {
++    Row(
++        Modifier.fillMaxWidth().padding(vertical = 7.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        Text(label, style = Coui.itemSummary, color = TextSecondary, modifier = Modifier.width(96.dp))
++        Text(value, style = Coui.itemSummary, color = TextPrimary, modifier = Modifier.weight(1f))
++    }
++}
++
++/** 稳定性条形指示，避免用第二个大圆环抢主视觉。 */
++@Composable
++internal fun StabilityBar(percent: Int, modifier: Modifier = Modifier) {
++    Canvas(modifier.fillMaxWidth().height(4.dp)) {
++        val radius = size.height / 2f
++        drawRoundRect(color = Outline.copy(alpha = 0.4f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius))
++        drawLine(
++            color = if (percent >= 80) Cyan else Amber,
++            start = Offset(0f, size.height / 2f),
++            end = Offset(size.width * (percent / 100f), size.height / 2f),
++            strokeWidth = size.height,
++            cap = StrokeCap.Round,
++        )
++    }
++}
++
++internal fun stabilityLabel(percent: Int): String = when {
++    percent >= 85 -> "平稳"
++    percent >= 65 -> "轻微波动"
++    else -> "波动明显"
++}
++
++internal fun formatMinutes(minutes: Int): String = when {
++    minutes < 60 -> "$minutes 分钟"
++    else -> "${minutes / 60} 小时 ${minutes % 60} 分"
++}
++
++private val TextStyleHuge = androidx.compose.ui.text.TextStyle(
++    fontSize = 34.sp,
++    fontWeight = FontWeight.SemiBold,
++    letterSpacing = (-0.5).sp,
++)
+diff --git a/app/src/main/java/com/oppower/ui/CouiUi.kt b/app/src/main/java/com/oppower/ui/CouiUi.kt
+new file mode 100644
+index 0000000..15b67f2
+--- /dev/null
++++ b/app/src/main/java/com/oppower/ui/CouiUi.kt
+@@ -0,0 +1,564 @@
++package com.oppower.ui
++
++import androidx.compose.animation.animateColorAsState
++import androidx.compose.animation.core.Spring
++import androidx.compose.animation.core.animateFloatAsState
++import androidx.compose.animation.core.spring
++import androidx.compose.foundation.background
++import androidx.compose.foundation.border
++import androidx.compose.foundation.Canvas
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.interaction.MutableInteractionSource
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.ColumnScope
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.RowScope
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.heightIn
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.shape.CircleShape
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.foundation.text.BasicTextField
++import androidx.compose.foundation.verticalScroll
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.runtime.CompositionLocalProvider
++import androidx.compose.runtime.staticCompositionLocalOf
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.geometry.Offset
++import androidx.compose.ui.geometry.Size
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.graphics.SolidColor
++import androidx.compose.ui.graphics.drawscope.Stroke
++import androidx.compose.ui.hapticfeedback.HapticFeedbackType
++import androidx.compose.ui.platform.LocalHapticFeedback
++import androidx.compose.ui.semantics.Role
++import androidx.compose.ui.text.TextStyle
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.input.ImeAction
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.Dp
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++
++/**
++ * ColorOS 17 / COUI-Kit 的排版与布局度量。
++ *
++ * 数值来自 COUI-Kit 0.0.1-alpha16 的 `CouiPageDefaults`、`CouiTextKind` 与
++ * `CouiSwitchDefaults`：卡片 24dp 连续圆角、页面左右 16dp、行内 16dp、行高 48dp、
++ * 分隔线 0.33dp、组标题与脚注内缩 32dp、开关 44×24 配 18dp 滑块。
++ *
++ * 该库当前要求 compileSdk 37 + AGP 9.1 才能消费其 AAR，与本项目的构建基线冲突，
++ * 因此这里按同一套公开度量实现等价组件，而不是引入二进制依赖。
++ */
++internal object Coui {
++    val pageMargin = 16.dp
++    val rowPadding = 16.dp
++    val rowMinHeight = 48.dp
++    val rowMinHeightCompact = 42.dp
++    val contentPadding = 10.dp
++    val contentPaddingCompact = 7.dp
++    val iconSpacing = 16.dp
++    val iconBox = 28.dp
++    val groupSpacing = 16.dp
++    val categoryTopSpacing = 12.dp
++    val cardRadius = 24.dp
++    val titleInset = 32.dp
++    val dividerHeight = 0.33.dp
++    val switchWidth = 44.dp
++    val switchHeight = 24.dp
++    val thumbSize = 18.dp
++    val thumbPadding = 3.dp
++    val segmentHeight = 38.dp
++
++    val itemTitle = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Medium)
++    val itemSummary = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Normal, lineHeight = 18.sp)
++    val itemValue = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Normal)
++    val groupTitle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Medium)
++    val groupFooter = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Normal, lineHeight = 17.sp)
++    val pageTitle = TextStyle(fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
++    val metricValue = TextStyle(fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
++
++    /** 紧凑模式下的字号收敛：标题与摘要各降 1sp，正文与数值不动以保持可读。 */
++    val itemTitleCompact = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Medium)
++    val itemSummaryCompact = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Normal, lineHeight = 16.sp)
++}
++
++/**
++ * 当前生效的行密度。由 [ProvideCouiMetrics] 在根布局注入，默认舒适。
++ *
++ * 拆分原因：`UiDensity` 属于 model 层，这里不直接依赖它，避免 UI 基础组件
++ * 反向耦合业务枚举；调用方只需把枚举映射成一个布尔值。
++ */
++internal data class CouiMetrics(
++    val compact: Boolean = false,
++) {
++    val rowMinHeight: Dp get() = if (compact) Coui.rowMinHeightCompact else Coui.rowMinHeight
++    val contentPadding: Dp get() = if (compact) Coui.contentPaddingCompact else Coui.contentPadding
++    val itemTitle: TextStyle get() = if (compact) Coui.itemTitleCompact else Coui.itemTitle
++    val itemSummary: TextStyle get() = if (compact) Coui.itemSummaryCompact else Coui.itemSummary
++}
++
++internal val LocalCouiMetrics = staticCompositionLocalOf { CouiMetrics() }
++
++@Composable
++internal fun ProvideCouiMetrics(compact: Boolean, content: @Composable () -> Unit) {
++    CompositionLocalProvider(LocalCouiMetrics provides CouiMetrics(compact = compact), content = content)
++}
++
++/** 分组卡片：单一 24dp 容器，条目之间用 0.33dp 分隔线，不再嵌套多层玻璃。 */
++@Composable
++internal fun CouiCard(
++    modifier: Modifier = Modifier,
++    content: @Composable ColumnScope.() -> Unit,
++) {
++    val shape = RoundedCornerShape(Coui.cardRadius)
++    Column(
++        modifier
++            .fillMaxWidth()
++            .clip(shape)
++            .background(Surface)
++            .border(0.5.dp, Outline.copy(alpha = 0.34f), shape),
++        content = content,
++    )
++}
++
++@Composable
++internal fun CouiGroup(
++    title: String? = null,
++    footer: String? = null,
++    modifier: Modifier = Modifier,
++    content: @Composable ColumnScope.() -> Unit,
++) {
++    Column(
++        modifier
++            .fillMaxWidth()
++            .padding(top = if (title.isNullOrEmpty()) Coui.groupSpacing else Coui.categoryTopSpacing),
++    ) {
++        if (!title.isNullOrEmpty()) {
++            Text(
++                title,
++                style = Coui.groupTitle,
++                color = TextSecondary,
++                modifier = Modifier.padding(start = Coui.titleInset, end = Coui.titleInset, top = 8.dp, bottom = 8.dp),
++            )
++        }
++        CouiCard(content = content)
++        if (!footer.isNullOrEmpty()) {
++            Text(
++                footer,
++                style = Coui.groupFooter,
++                color = TextSecondary.copy(alpha = 0.86f),
++                modifier = Modifier.padding(start = Coui.titleInset, end = Coui.titleInset, top = 8.dp),
++            )
++        }
++    }
++}
++
++@Composable
++internal fun CouiDivider(
++    startIndent: Dp = Coui.rowPadding,
++    endIndent: Dp = Coui.rowPadding,
++) {
++    Box(
++        Modifier
++            .fillMaxWidth()
++            .padding(start = startIndent, end = endIndent)
++            .height(Coui.dividerHeight)
++            .background(Outline.copy(alpha = 0.55f)),
++    )
++}
++
++/**
++ * 通用行。`onClick` 为空时不安装点击语义，与 COUI 的 `Item` 一致；
++ * 末端的值、开关或箭头由 [trailing] 提供。
++ */
++@Composable
++internal fun CouiRow(
++    title: String,
++    summary: String? = null,
++    icon: (@Composable () -> Unit)? = null,
++    leading: (@Composable () -> Unit)? = null,
++    value: String? = null,
++    valueColor: Color = TextSecondary,
++    chevron: Boolean = false,
++    enabled: Boolean = true,
++    role: Role? = null,
++    minHeight: Dp = LocalCouiMetrics.current.rowMinHeight,
++    onClick: (() -> Unit)? = null,
++    trailing: (@Composable RowScope.() -> Unit)? = null,
++) {
++    val interaction = remember { MutableInteractionSource() }
++    val metrics = LocalCouiMetrics.current
++    Row(
++        Modifier
++            .fillMaxWidth()
++            .then(
++                if (onClick != null) {
++                    Modifier.clickable(
++                        interactionSource = interaction,
++                        indication = null,
++                        enabled = enabled,
++                        role = role,
++                        onClick = onClick,
++                    )
++                } else {
++                    Modifier
++                },
++            )
++            .heightIn(min = minHeight)
++            .padding(horizontal = Coui.rowPadding, vertical = metrics.contentPadding),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        if (icon != null) {
++            Box(Modifier.size(Coui.iconBox), contentAlignment = Alignment.Center) { icon() }
++            Spacer(Modifier.width(Coui.iconSpacing))
++        }
++        leading?.invoke()
++        Column(Modifier.weight(1f)) {
++            Text(
++                title,
++                style = metrics.itemTitle,
++                color = if (enabled) TextPrimary else TextSecondary.copy(alpha = 0.5f),
++                maxLines = 2,
++                overflow = TextOverflow.Ellipsis,
++            )
++            if (!summary.isNullOrEmpty()) {
++                Text(
++                    summary,
++                    style = metrics.itemSummary,
++                    color = TextSecondary,
++                    modifier = Modifier.padding(top = 2.dp),
++                )
++            }
++        }
++        if (value != null) {
++            Text(
++                value,
++                style = Coui.itemValue,
++                color = if (enabled) valueColor else TextSecondary.copy(alpha = 0.5f),
++                modifier = Modifier.padding(start = 12.dp),
++                maxLines = 1,
++            )
++        }
++        trailing?.let {
++            Row(verticalAlignment = Alignment.CenterVertically, content = it)
++        }
++        if (chevron) {
++            Text(
++                "›",
++                color = TextSecondary.copy(alpha = 0.8f),
++                fontSize = 18.sp,
++                modifier = Modifier.padding(start = 6.dp),
++            )
++        }
++    }
++}
++
++@Composable
++internal fun CouiSwitchRow(
++    title: String,
++    summary: String? = null,
++    checked: Boolean,
++    enabled: Boolean = true,
++    onCheckedChange: (Boolean) -> Unit,
++) {
++    CouiRow(
++        title = title,
++        summary = summary,
++        enabled = enabled,
++        role = Role.Switch,
++        onClick = { if (enabled) onCheckedChange(!checked) },
++        trailing = {
++            CouiSwitch(checked = checked, enabled = enabled, onCheckedChange = onCheckedChange)
++        },
++    )
++}
++
++/** 44×24 开关，滑块 18dp，行程 20dp；点击与拖动都走同一个业务回调。 */
++@Composable
++internal fun CouiSwitch(
++    checked: Boolean,
++    onCheckedChange: (Boolean) -> Unit,
++    enabled: Boolean = true,
++) {
++    val haptic = LocalHapticFeedback.current
++    val progress by animateFloatAsState(
++        targetValue = if (checked) 1f else 0f,
++        animationSpec = spring(dampingRatio = 0.72f, stiffness = 720f),
++        label = "coui-switch",
++    )
++    val trackOff = Outline.copy(alpha = if (enabled) 0.75f else 0.4f)
++    val track by animateColorAsState(
++        targetValue = if (checked) Cyan.copy(alpha = if (enabled) 1f else 0.45f) else trackOff,
++        animationSpec = spring(stiffness = Spring.StiffnessLow),
++        label = "coui-switch-track",
++    )
++    Box(
++        Modifier
++            .size(Coui.switchWidth, Coui.switchHeight)
++            .clip(CircleShape)
++            .background(track)
++            .clickable(
++                enabled = enabled,
++                role = Role.Switch,
++                indication = null,
++                interactionSource = remember { MutableInteractionSource() },
++            ) {
++                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
++                onCheckedChange(!checked)
++            },
++    ) {
++        val travel = Coui.switchWidth - Coui.thumbSize - Coui.thumbPadding * 2
++        Canvas(Modifier.fillMaxSize()) {
++            val thumb = Coui.thumbSize.toPx()
++            val pad = Coui.thumbPadding.toPx()
++            val x = pad + travel.toPx() * progress
++            drawCircle(
++                color = Color.White.copy(alpha = if (enabled) 1f else 0.7f),
++                radius = thumb / 2f,
++                center = Offset(x + thumb / 2f, size.height / 2f),
++            )
++        }
++    }
++}
++
++/** 胶囊分段选择器；指示器跟手动画，点击即提交。 */
++@Composable
++internal fun CouiSegmented(
++    labels: List<String>,
++    selectedIndex: Int,
++    modifier: Modifier = Modifier,
++    onSelected: (Int) -> Unit,
++) {
++    if (labels.isEmpty()) return
++    val safeIndex = selectedIndex.coerceIn(0, labels.lastIndex)
++    val fraction by animateFloatAsState(
++        targetValue = safeIndex / labels.lastIndex.coerceAtLeast(1).toFloat(),
++        animationSpec = spring(dampingRatio = 0.78f, stiffness = 520f),
++        label = "coui-segment",
++    )
++    Row(
++        modifier
++            .fillMaxWidth()
++            .height(Coui.segmentHeight)
++            .clip(CircleShape)
++            .background(Outline.copy(alpha = 0.30f))
++            .padding(3.dp),
++    ) {
++        Box(Modifier.fillMaxSize()) {
++            Canvas(Modifier.fillMaxSize()) {
++                val segment = size.width / labels.size
++                val x = (size.width - segment) * fraction
++                drawRoundRect(
++                    color = Surface,
++                    topLeft = Offset(x, 0f),
++                    size = Size(segment, size.height),
++                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2f),
++                )
++            }
++            Row(Modifier.fillMaxSize()) {
++                labels.forEachIndexed { index, label ->
++                    Box(
++                        Modifier
++                            .weight(1f)
++                            .fillMaxSize()
++                            .clip(CircleShape)
++                            .clickable(
++                                indication = null,
++                                interactionSource = remember { MutableInteractionSource() },
++                            ) { onSelected(index) },
++                        contentAlignment = Alignment.Center,
++                    ) {
++                        Text(
++                            label,
++                            fontSize = 13.sp,
++                            fontWeight = if (index == safeIndex) FontWeight.SemiBold else FontWeight.Normal,
++                            color = if (index == safeIndex) Cyan else TextSecondary,
++                            maxLines = 1,
++                        )
++                    }
++                }
++            }
++        }
++    }
++}
++
++@Composable
++internal fun CouiChoiceRow(
++    title: String,
++    labels: List<String>,
++    selectedIndex: Int,
++    summary: String? = null,
++    onSelected: (Int) -> Unit,
++) {
++    Column(
++        Modifier
++            .fillMaxWidth()
++            .padding(horizontal = Coui.rowPadding, vertical = LocalCouiMetrics.current.contentPadding),
++    ) {
++        Text(title, style = LocalCouiMetrics.current.itemTitle, color = TextPrimary)
++        if (!summary.isNullOrEmpty()) {
++            Text(summary, style = LocalCouiMetrics.current.itemSummary, color = TextSecondary, modifier = Modifier.padding(top = 2.dp))
++        }
++        CouiSegmented(
++            labels = labels,
++            selectedIndex = selectedIndex,
++            modifier = Modifier.padding(top = 10.dp),
++            onSelected = onSelected,
++        )
++    }
++}
++
++/** 二级页面外壳：返回圆钮 + 大标题 + 统一安全区与滚动。 */
++@Composable
++internal fun CouiPage(
++    title: String,
++    subtitle: String? = null,
++    onBack: () -> Unit,
++    content: @Composable ColumnScope.() -> Unit,
++) {
++    Column(
++        Modifier
++            .fillMaxSize()
++            .verticalScroll(rememberScrollState())
++            .padding(horizontal = Coui.pageMargin, vertical = 10.dp),
++        verticalArrangement = Arrangement.spacedBy(2.dp),
++    ) {
++        Row(verticalAlignment = Alignment.CenterVertically) {
++            Box(
++                Modifier
++                    .size(40.dp)
++                    .clip(CircleShape)
++                    .background(Surface)
++                    .border(0.5.dp, Outline.copy(alpha = 0.34f), CircleShape)
++                    .clickable(onClick = onBack),
++                contentAlignment = Alignment.Center,
++            ) {
++                Text("‹", color = TextPrimary, fontSize = 24.sp, modifier = Modifier.padding(bottom = 2.dp))
++            }
++            Column(Modifier.padding(start = 14.dp)) {
++                Text(title, style = Coui.pageTitle, color = TextPrimary)
++                if (!subtitle.isNullOrEmpty()) {
++                    Text(
++                        subtitle,
++                        style = Coui.groupFooter,
++                        color = TextSecondary,
++                        modifier = Modifier.padding(top = 2.dp),
++                    )
++                }
++            }
++        }
++        content()
++        Spacer(Modifier.height(20.dp))
++    }
++}
++
++/** 设置搜索框：单行胶囊，空态显示提示，输入即过滤。 */
++@Composable
++internal fun CouiSearchField(
++    value: String,
++    onValueChange: (String) -> Unit,
++    placeholder: String = "搜索设置",
++) {
++    Row(
++        Modifier
++            .fillMaxWidth()
++            .height(40.dp)
++            .clip(CircleShape)
++            .background(Surface)
++            .border(0.5.dp, Outline.copy(alpha = 0.34f), CircleShape)
++            .padding(horizontal = 14.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        Canvas(Modifier.size(15.dp)) {
++            val stroke = Stroke(width = 1.6.dp.toPx())
++            drawCircle(
++                color = TextSecondary,
++                radius = size.minDimension * 0.34f,
++                center = Offset(size.width * 0.42f, size.height * 0.42f),
++                style = stroke,
++            )
++            drawLine(
++                color = TextSecondary,
++                start = Offset(size.width * 0.68f, size.height * 0.68f),
++                end = Offset(size.width * 0.94f, size.height * 0.94f),
++                strokeWidth = 1.6.dp.toPx(),
++            )
++        }
++        Box(Modifier.weight(1f).padding(start = 10.dp)) {
++            if (value.isEmpty()) {
++                Text(placeholder, style = Coui.itemSummary, color = TextSecondary.copy(alpha = 0.8f))
++            }
++            BasicTextField(
++                value = value,
++                onValueChange = onValueChange,
++                singleLine = true,
++                textStyle = Coui.itemSummary.copy(color = TextPrimary),
++                cursorBrush = SolidColor(Cyan),
++                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Search),
++                modifier = Modifier.fillMaxWidth(),
++            )
++        }
++        if (value.isNotEmpty()) {
++            Text(
++                "✕",
++                color = TextSecondary,
++                fontSize = 13.sp,
++                modifier = Modifier
++                    .clip(CircleShape)
++                    .clickable { onValueChange("") }
++                    .padding(4.dp),
++            )
++        }
++    }
++}
++
++/** 状态圆点：用颜色而非文字表达“是否就绪”，与 COUI 列表的克制风格一致。 */
++@Composable
++internal fun CouiStatusDot(ok: Boolean, warn: Boolean = false) {
++    val color = when {
++        ok -> Cyan
++        warn -> Amber
++        else -> Danger
++    }
++    Box(
++        Modifier
++            .size(7.dp)
++            .clip(CircleShape)
++            .background(color.copy(alpha = 0.9f)),
++    )
++}
++
++@Composable
++internal fun CouiSectionTitle(text: String, modifier: Modifier = Modifier) {
++    Text(
++        text,
++        style = Coui.groupTitle,
++        color = TextSecondary,
++        modifier = modifier.padding(start = Coui.titleInset, top = Coui.categoryTopSpacing, bottom = 6.dp),
++    )
++}
++
++/** 主页面分组标题，与设置页保持同一内缩与字重。 */
++@Composable
++internal fun CouiPageHeader(title: String, trailing: @Composable () -> Unit = {}) {
++    Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
++        Text(title, style = Coui.pageTitle, color = TextPrimary, modifier = Modifier.weight(1f))
++        trailing()
++    }
++}
+diff --git a/app/src/main/res/xml/file_paths.xml b/app/src/main/res/xml/file_paths.xml
+new file mode 100644
+index 0000000..ff965fd
+--- /dev/null
++++ b/app/src/main/res/xml/file_paths.xml
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="utf-8"?>
++<paths>
++    <cache-path
++        name="export"
++        path="export/" />
++</paths>
+diff --git a/app/src/test/java/com/oppower/battery/ChargeInspectorTest.kt b/app/src/test/java/com/oppower/battery/ChargeInspectorTest.kt
+new file mode 100644
+index 0000000..a8ca83b
+--- /dev/null
++++ b/app/src/test/java/com/oppower/battery/ChargeInspectorTest.kt
+@@ -0,0 +1,222 @@
++package com.oppower.battery
++
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertNotNull
++import org.junit.Assert.assertNull
++import org.junit.Assert.assertTrue
++import org.junit.Test
++
++class ChargeInspectorTest {
++    private val dump = """
++        [dir] battery
++        type=Battery
++        voltage_now=4385000
++        charge_full=4820000
++        charge_full_design=5000000
++        cycle_count=128
++        temp=365
++        [dir] usb
++        type=USB
++        online=1
++        voltage_max=11000000
++        current_max=6000000
++        usb_type=USB_PD_PPS
++    """.trimIndent()
++
++    @Test
++    fun parsesEveryNodeAndIgnoresBrokenLines() {
++        val nodes = PowerSupplyDump.parse(
++            """
++            [dir] usb
++            online=1
++            broken line without separator
++            voltage_max=9000000
++            """
++                .trimIndent(),
++        )
++        assertEquals(1, nodes.size)
++        assertEquals("usb", nodes[0].name)
++        assertEquals(9_000_000L, nodes[0].long("voltage_max"))
++        assertTrue(nodes[0].online)
++    }
++
++    @Test
++    fun detectsPpsCapabilityFromMicroUnits() {
++        val capability = ChargeInspector.detectCharger(PowerSupplyDump.parse(dump))
++        assertNotNull(capability)
++        assertEquals("USB PD PPS", capability!!.protocolLabel)
++        assertEquals(11_000, capability.maxVoltageMv)
++        assertEquals(6_000, capability.maxCurrentMa)
++        assertEquals(66f, capability.maxPowerW, 0.01f)
++        assertTrue(capability.isFastCharge)
++    }
++
++    @Test
++    fun ignoresBatteryNodeWhenLookingForCharger() {
++        val onlyBattery = PowerSupplyDump.parse(
++            """
++            [dir] battery
++            type=Battery
++            online=1
++            voltage_max=4400000
++            current_max=3000000
++            """
++                .trimIndent(),
++        )
++        assertNull(ChargeInspector.detectCharger(onlyBattery))
++    }
++
++    @Test
++    fun computesBatteryHealthFromChargeCounters() {
++        val health = ChargeInspector.detectHealth(PowerSupplyDump.parse(dump))
++        assertNotNull(health)
++        assertEquals(5_000, health!!.designMah)
++        assertEquals(4_820, health.fullMah)
++        assertEquals(96, health.percent)
++        assertEquals(128, health.cycleCount)
++        assertEquals(36.5f, health.temperatureC!!, 0.01f)
++    }
++
++    @Test
++    fun stageFollowsVoltageAndCurrentBoundaries() {
++        assertEquals(
++            ChargeStage.DISCONNECTED,
++            ChargeInspector.detectStage(false, 50, 3_000, 4_000, 2, null),
++        )
++        assertEquals(
++            ChargeStage.FULL,
++            ChargeInspector.detectStage(true, 100, 0, 4_400, 5, null),
++        )
++        assertEquals(
++            ChargeStage.TRICKLE,
++            ChargeInspector.detectStage(true, 97, 120, 4_380, 2, 600_000),
++        )
++        assertEquals(
++            ChargeStage.CONSTANT_VOLTAGE,
++            ChargeInspector.detectStage(true, 90, 2_000, 4_400, 2, 600_000),
++        )
++        assertEquals(
++            ChargeStage.HANDSHAKE,
++            ChargeInspector.detectStage(true, 40, 2_000, 4_000, 2, 5_000),
++        )
++        assertEquals(
++            ChargeStage.CONSTANT_CURRENT,
++            ChargeInspector.detectStage(true, 40, 6_000, 4_100, 2, 120_000),
++        )
++    }
++
++    @Test
++    fun doubleCellThresholdDelaysConstantVoltage() {
++        assertEquals(
++            ChargeStage.CONSTANT_CURRENT,
++            ChargeInspector.detectStage(true, 80, 3_000, 4_500, 2, 600_000, doubleCell = true),
++        )
++    }
++
++    @Test
++    fun estimatesMinutesToFullFromMedianSlope() {
++        val now = 1_000_000L
++        val points = listOf(
++            now to 40,
++            now + 120_000 to 42,
++            now + 240_000 to 44,
++            now + 360_000 to 46,
++        )
++        // 1 %/min → 剩余 54 % 需要 54 分钟
++        assertEquals(54, ChargeInspector.estimateMinutesToFull(46, points))
++    }
++
++    @Test
++    fun refusesToEstimateWithoutUsableSlope() {
++        assertNull(ChargeInspector.estimateMinutesToFull(50, emptyList()))
++        assertNull(ChargeInspector.estimateMinutesToFull(100, listOf(1L to 99, 2L to 100)))
++        val flat = listOf(0L to 50, 60_000L to 50, 120_000L to 50)
++        assertNull(ChargeInspector.estimateMinutesToFull(50, flat))
++    }
++
++    @Test
++    fun stabilityFallsWithPowerNoise() {
++        assertEquals(100, ChargeInspector.stabilityPercent(emptyList()))
++        val steady = List(10) { 20f }
++        assertEquals(100, ChargeInspector.stabilityPercent(steady))
++        val noisy = listOf(5f, 35f, 8f, 32f, 6f, 34f, 7f, 33f, 9f, 30f)
++        assertTrue(ChargeInspector.stabilityPercent(noisy) < 40)
++    }
++
++    @Test
++    fun efficiencyComparesChargedEnergyWithInput() {
++        // 30 分钟、平均 20 W 输入约 10 Wh；充入 2000 mAh ≈ 7.7 Wh → 约 77%
++        assertEquals(77, ChargeInspector.chargeEfficiency(2_000, 20f, 30f))
++        assertNull(ChargeInspector.chargeEfficiency(null, 20f, 30f))
++        assertNull(ChargeInspector.chargeEfficiency(0, 20f, 30f))
++        assertNull(ChargeInspector.chargeEfficiency(2_000, 0f, 30f))
++    }
++
++    @Test
++    fun flagsWeakLinkWhenChargerIsCapableButPowerIsLow() {
++        val insight = ChargeInspector.analyze(
++            dump = dump,
++            acOnline = true,
++            levelPercent = 55,
++            currentMa = 1_200,
++            voltageMv = 4_150,
++            powerW = 5f,
++            batteryTempC = 33f,
++            batteryStatus = 2,
++            pluggedForMillis = 180_000,
++        )
++        assertTrue(insight.anomalies.any { it.contains("充电器支持") })
++        assertEquals(7, insight.utilizationPercent)
++        assertEquals(ChargeStage.CONSTANT_CURRENT, insight.stage)
++    }
++
++    @Test
++    fun reportsZeroCurrentAfterPlugIn() {
++        val insight = ChargeInspector.analyze(
++            dump = dump,
++            acOnline = true,
++            levelPercent = 60,
++            currentMa = 0,
++            voltageMv = 4_150,
++            powerW = 0f,
++            batteryTempC = 30f,
++            batteryStatus = 2,
++            pluggedForMillis = 60_000,
++        )
++        assertTrue(insight.anomalies.any { it.contains("电流接近 0") })
++    }
++
++    @Test
++    fun idleStateProducesNoAnomalies() {
++        val insight = ChargeInspector.analyze(
++            dump = "",
++            acOnline = false,
++            levelPercent = 70,
++            currentMa = -500,
++            voltageMv = 4_000,
++            powerW = -2f,
++            batteryTempC = 30f,
++            batteryStatus = 3,
++            pluggedForMillis = null,
++        )
++        assertEquals(ChargeStage.DISCONNECTED, insight.stage)
++        assertTrue(insight.anomalies.isEmpty())
++        assertTrue(insight.isHealthy)
++    }
++
++    @Test
++    fun highTemperatureIsSurfaced() {
++        val insight = ChargeInspector.analyze(
++            dump = dump,
++            acOnline = true,
++            levelPercent = 50,
++            currentMa = 5_000,
++            voltageMv = 4_200,
++            powerW = 21f,
++            batteryTempC = 43.5f,
++            batteryStatus = 2,
++            pluggedForMillis = 300_000,
++        )
++        assertTrue(insight.anomalies.any { it.contains("接近降档阈值") })
++    }
++}
