@@ -1,0 +1,72 @@
+OPPower 1.0.0-beta45 构建说明
+================================
+
+上一版诊断跑出来的结果和预设不符，这一版是修正 + 加深。
+
+真机结果（beta44，一加 13 / PJZ110）
+------------------------------------
+  persist.sys.horae.enable   = 1        ← 属性存在且已启用，这条路有戏
+  persist.sys.horae.debug    = <不存在>
+  horae 进程                 = absent   ← 可疑
+  身份 shell                 = 0        ← Shizuku 是以 root 起的
+  oplus_dbg_tbat             = 0
+  ufcs / pps / svooc_active  = <不可读>
+
+一、修的 bug：进程名匹配永远失败
+--------------------------------
+上一版这样判断：
+
+    File(pid, "cmdline").readText().trimEnd('\u0000') == "horae"
+
+`/proc/<pid>/cmdline` 里存的是**完整路径** `/system/bin/horae`，不是裸名字；
+带启动参数的还会更长。所以这个相等判断对真实的 horae 进程恒为 false——
+截图里那个 absent，很可能是我自己的 bug，不是服务真的没跑。
+
+现在取 argv[0] 的 basename 再判断子串：
+
+    readText().substringBefore('\u0000').substringAfterLast('/').trim()
+        .contains("horae", ignoreCase = true)
+
+只取 argv[0] 是必须的：整条 cmdline 匹配会把诊断自己执行的那条
+`sh -c getprop persist.sys.horae.enable` 数进去，永远报"存在"，诊断就没意义了。
+顺带这样也能发现 `horae64`、`com.oplus.horae` 这类变体。
+
+二、新增三项探测
+----------------
+[prop] init.svc.horae         init 眼里这个服务是 running / stopped / 空（未定义）。
+                              比扫 /proc 可靠：进程不在可能是没启动，也可能是名字不对。
+[bin]  /system/bin/horae      present / missing。二分"服务没定义"还是"定义了但没跑"。
+[param] oplus_chg_v2 参数清单  新增独立分组，格式 name=value。
+
+第三条是这一版真正的重点。之前分析第三方模块时推断 `max_voltage` /
+`pps_max_voltage` / `temp_target` 是 `oplus_chg_v2` 模块的配置字段名。
+如果这些字段真的存在，改它们比重启整个热控服务直接得多——不用停服务、
+不用管 init 状态，而且服务不在跑也照样能改。先把清单摊出来再谈。
+
+三、删掉一项
+------------
+`persist.sys.horae.debug` 确认不存在，不再读。省一次 shell fork
+（每次读属性都要 fork 一个 `getprop`，这条探针里有三条）。
+
+验证
+----
+:app:assembleDebug --rerun-tasks   PASS，0 warning
+:app:assembleRelease               PASS（R8 + 资源压缩）
+:app:testDebugUnitTest             138 / 138 PASS（新增 1 条参数分组用例）
+:app:lintDebug                     0 error / 0 warning
+
+产物
+----
+OPPower-1.0.0-beta45-debug.apk             38,417,798 bytes
+OPPower-1.0.0-beta45-release-debugkey.apk   3,487,859 bytes（可安装）
+OPPower-1.0.0-beta45-release-unsigned.apk   3,469,116 bytes（未签名，装不上）
+versionCode 45 / versionName 1.0.0-beta45
+
+装完之后要看的三行
+------------------
+1. `进程 horae` —— 如果这次变成 `/system/bin/horae` 或类似名字，说明上版的 absent 是 bug。
+   仍然 absent 且 `init.svc.horae` 为 stopped，说明服务定义了但从没启动。
+2. `init.svc.horae` —— running 最好；stopped 意味着 `start horae` 能拉起来；
+   空表示这台机器根本没有这个 init 服务，`persist.sys.horae.enable=1` 是别的模块在用。
+3. `充电模块参数` 分组里有没有 voltage / current / temp 字样的字段。
+   有就说明可以在不改服务的前提下直接调参数，这条路比重启服务安全得多。
