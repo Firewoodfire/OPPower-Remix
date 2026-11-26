@@ -1,0 +1,56 @@
+OPPower 1.0.0-beta33
+====================
+
+versionCode : 33
+versionName : 1.0.0-beta33
+构建日期    : 2026-11-23
+
+产物
+----
+OPPower-1.0.0-beta33-debug.apk            10,941,635 bytes（debug 签名，可直接安装）
+OPPower-1.0.0-beta33-release-unsigned.apk  1,669,366 bytes（未签名，需自备 keystore）
+
+工具链
+------
+JDK 17 / Android SDK 36（compileSdk 36, minSdk 26）/ Gradle 8.13 / AGP 8.10.1 / Kotlin 2.1.21
+
+验证
+----
+:app:testDebugUnitTest   129 passed, 0 failed
+:app:lintDebug           0 errors, 2 warnings, 0 hints   （beta32 为 0/21/1）
+
+本次改动（继续修 beta32 的不足）
+--------------------------------
+一、限流的正确性（重要）
+1. 漂移核对基准改为"系统实际接受的值"。平台会把写入吸附到自己的档位表
+   （3000 → 2900），beta32 拿目标值当基准会导致每 10 秒无意义重写一次。
+   新增 actualChargeLimitMa 只在回读成功时更新，并用单测锁定"被吸附不重写"。
+2. 节点被写成 0 时的应急补救。部分平台 `constant_charge_current_max = 0`
+   语义是"禁止充电"，beta32 只把状态标成不支持就放弃了，设备可能插着电不涨电。
+   现在 rescueZeroChargeLimit() 会按「原始值 → 上次实际值 → 2000mA」的顺序
+   尽力写回一个能充电的值。
+3. 恢复路径拒绝不可信原始值。ChargeLimitScale.usableRaw() 拦掉 0 与负数：
+   写入时节点就是 0 说明系统处于异常态，拿它恢复会把上限永久固定在 0。
+
+二、代码质量（lint 21 警告 → 2）
+1. 删除两个确认无引用的死资源：res/layout/notification_charge_status.xml、
+   res/drawable/ic_notification_tracker_dot.xml（顺带消掉 4 条 SmallSp 与 1 条 HardcodedText）。
+2. 引入 androidx.core:core-ktx:1.13.1，按 KTX 改写 9 处：
+   SharedPreferences.edit {}、SQLiteDatabase.transaction {}、String.toUri()。
+   其中 resetAll() 用 edit(commit = true)，因为紧接着要重新读回 intro_seen。
+3. CouiGroup / CouiPage 的 Modifier 提到首个可选参数（Compose 规范），
+   所有调用点同步改为具名参数。
+4. AndroidManifest 补 dataExtractionRules + fullBackupContent=false，
+   新增 res/xml/data_extraction_rules.xml：云备份与设备迁移一律排除本地数据。
+5. 常见问题页的展开索引改用 mutableIntStateOf，避免 Int 装箱。
+
+剩余 2 条警告：Gradle 8.13 → 8.14.8 的升级提示（构建工具链升级，不在本轮范围）。
+
+测试
+----
+129 项通过（beta32 为 125）：
+- 新增 snappedNodeDoesNotCauseEndlessRewrites：平台吸附后不得反复重写
+- 新增 zeroedNodeIsRescuedToASafeValue：归零后必须写回安全值
+- 新增 onlyPositiveRawIsRestorable / restorableOnlyWhenOppowerWroteIt：原始值可信度
+
+功能无删减。
