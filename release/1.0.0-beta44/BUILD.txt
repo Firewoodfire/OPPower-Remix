@@ -1,0 +1,102 @@
+OPPower 1.0.0-beta44 构建说明
+================================
+
+本版做两件事：把「不 root 能不能让系统重算热控」这件事先量出来，
+以及收掉一条真实存在的命令注入面。没有改界面骨架，没有新增依赖。
+
+产物
+----
+OPPower-1.0.0-beta44-debug.apk             38,401,414 bytes
+OPPower-1.0.0-beta44-release-unsigned.apk   3,469,116 bytes
+versionCode 44 / versionName 1.0.0-beta44
+minSdk 34 / targetSdk 37 / compileSdk 37
+
+一、新增只读「热控诊断」（设置 → 硬件修正）
+------------------------------------------
+背景：第三方模块（UFCS 那类）提升充电功率用的是
+  setprop persist.sys.horae.enable 1; start horae
+即重启 horae 服务来强制重算热控策略。这条路不写 sysfs、不需要 root，
+但前提是这台机器的固件里确实有这条厂商开关。
+
+所以在做任何"重启热控"按钮之前，先做一个只读探针。读取结果原样摊开：
+
+  属性 persist.sys.horae.enable     1 / <不存在>
+  属性 persist.sys.horae.debug      …
+  进程 horae                        alive / absent
+  节点 oplus_dbg_tbat               …
+  节点 ufcs_active / pps_active / svooc_active  …
+
+判定规则很直接：
+- 属性显示「不存在」→ 本机没有这条通道，方案 B 不做，省得返工；
+- 属性存在但进程 absent → 改写属性会让下一次策略查询落到"服务不在"的兜底分支，
+  同样不做；
+- 协议节点能读到且为 1 → 已进入 UFCS/PPS/SVOOC 快充族，才值得去动热控。
+
+安全边界：整条链路只读。属性走白名单里的两条精确 getprop，
+进程状态扫 /proc（不 fork shell），节点直接读文件。
+即使这个功能最后删掉，也没有留下任何写入面。
+
+二、修掉白名单正则的注入面（PrivilegedCommandService）
+------------------------------------------------------
+原来的两条正则没有两端锚点：
+
+  Regex("settings put global cosa_ctc_value (?:-10|-?\\d)")
+  Regex("settings put system (?:oplus_camera_3rd_activity|oplus_float_window_show) (?:0|1|00|01)")
+
+而 execute() 是把整个字符串交给 `sh -c` 执行的。于是
+
+  settings put global cosa_ctc_value 0; reboot
+
+能匹配成功——匹配只要求"含这段前缀"，不要求"整串就是它"。
+虽然能构造这条命令的前提是应用自身被改写，属于纵深防御而非直接可利用，
+但这是白名单该有的基本正确性，顺手收掉：
+
+  ^settings put global cosa_ctc_value (?:-[1-9]|-10|\\d)$
+  ^settings put system (?:oplus_camera_3rd_activity|oplus_float_window_show) (?:0|1|00|01)$
+
+上界跟着 GearCalculator.COSA_MAX 走（-10…9），不跟着"道理上的范围"走——
+控制层永远不会写 9 以上的值，白名单没必要比实现更宽。
+
+三、AIDL 第 8 个方法
+--------------------
+  String readThermalDiagnostics() = 8;
+
+返回原始多行文本 `[tag] key=value`，解析放在 UI 侧。
+这样服务端将来多吐几行（比如再加一个协议节点）不用动 AIDL 签名，
+也不用给旧调用方做兼容分支。
+
+验证
+----
+:app:assembleDebug --rerun-tasks   PASS，0 warning
+:app:assembleRelease               PASS（R8 + 资源压缩）
+:app:testDebugUnitTest             137 / 137 PASS（新增 6 条）
+:app:lintDebug                     0 error / 0 warning（仅两条依赖更新提示）
+
+新增用例
+  regexEntriesAreAnchoredAtBothEnds
+    `;` / `&&` / `|` / `$(...)` / 换行 / 前后缀 共 10 种拼接写法全部拒绝。
+  getpropAllowlistRejectsArbitraryPropertyNames
+    任意属性名、裸 getprop、属性名后接 `;`、以及 setprop 一律拒绝。
+  ThermalDiagnosticsParsingTest（4 条）
+    标签解析、空输入、非标签行跳过、值里含 `=` 不被截断。
+
+修正的既有用例
+  rejectsShellInjectionAndUnknownSettings 里原本断言 `cosa_ctc_value 10` 非法。
+  该断言与 GearCalculator.COSA_MAX=9 的实现一致，但和注释里"范围 -10…10"的
+  说法矛盾。现在按实现统一为 -10…9，用例改为断言 9 合法、10 非法。
+
+体积
+----
+debug  +16,384 B（诊断实现 + 设置页一组 UI）
+release +0 B（R8 之后落在同一页内，四舍五入无变化）
+
+仍需真机复验
+------------
+1. 一加 13（PJZ110）上 `persist.sys.horae.enable` 到底存不存在 —— 这是本版
+   唯一真正想知道的事。显示「不存在」就直接放弃方案 B。
+2. horae 进程名是否就叫 horae（部分固件是 com.oplus.horae 或带 :remote 后缀）。
+   若显示 absent 但系统明显有热控策略在跑，说明进程名对不上，要改匹配规则。
+3. ufcs_active / pps_active / svooc_active 三个节点在本机是否存在。
+   都 <不可读> 也不代表没快充，只是内核没对外暴露这一层。
+4. 诊断读取是否卡顿：一次要跑两条 getprop（各一次 shell fork）+ 扫 /proc。
+   若点击后明显迟滞，改成只读属性、把 /proc 扫描去掉。
