@@ -1,0 +1,57 @@
+OPPower 1.0.0-beta34
+====================
+
+versionCode : 34
+versionName : 1.0.0-beta34
+构建日期    : 2026-11-23
+
+产物
+----
+OPPower-1.0.0-beta34-debug.apk            10,876,099 bytes（debug 签名，可直接安装）
+OPPower-1.0.0-beta34-release-unsigned.apk  1,652,982 bytes（未签名，需自备 keystore）
+
+工具链
+------
+JDK 17 / Android SDK 36（compileSdk 36, minSdk 26）/ Gradle 8.13 / AGP 8.10.1 / Kotlin 2.1.21
+
+验证
+----
+:app:testDebugUnitTest   129 passed, 0 failed
+:app:lintDebug           0 errors, 2 warnings, 0 hints
+
+本次改动：主页面按 COUI 结构从零重做
+------------------------------------
+beta31 只把「圆角 + 配色」换成 COUI，主页面内部仍是旧仪表盘：一张大卡里塞
+功率英雄区、6 个九宫格 Metric、3 个 ActionTile，字号 9/10/11sp，进度条带渐变，
+面板带投影。这不是 COUI，只是换皮。beta34 把 MainPage.kt 整体重写（1496 → 1125 行，含图表绘制与记录弹窗）。
+
+一、结构：组标题在卡外 + 24dp 超椭圆卡 + 48dp 行
+1. 页面只剩 6 个分组，每组的标题在卡片之外、内缩 32dp、12sp Medium：
+   • 顶部栏 HomeTopBar（标题 + QQ群 + 设置两个图标按钮）
+   • StatusGroup   实时功率 + 电池电流/电压/温度/系统电量/充电状态/供电方式
+   • ControlGroup  亮屏快充 / 基础档位 / 高功率保活 / 实时电流上限（限流开启时才出现）
+   • DetectGroup   充电阶段、充电器能力、预计充满、功率利用率、稳定性、异常 ×3
+   • RecordsGroup  充电记录 / 放电记录 / 实时通知
+   • ChartsGroup   功率曲线 + 温度曲线（同一张卡，中间 0.33dp 分隔线）
+2. 删掉 PowerHero / Metric / ActionTile / ForceChargeCard / LevelZeroCard /
+   SessionRecords / RecordCard / SectionHeader / ControlIssueCard 全部旧组件。
+3. ChargeDetectPanel.kt 从 301 行删到 18 行：自绘的 ChargeDetectCard、StageChip、
+   CouiMetric、DetailRow、StabilityBar 全部移除，只保留 stabilityLabel / formatMinutes
+   两个共享的纯文本函数。检测数据现在走 DetectGroup 的标准行。
+
+二、字号与度量收敛
+1. 主功率改用 CouiType.metricHuge（34sp），独占一行，右侧跟随充电状态点。
+2. 所有行标题统一 Coui.itemTitle（16sp），摘要 Coui.itemSummary（13sp），
+   行高 48dp（紧凑 42dp），左内缩 16dp，图标 24dp。
+3. 全文件只剩 3 处小字号，且都在 Canvas 绘图内部（曲线轴标签、时间轴刻度），
+   属于图形标注而非界面文字。
+
+三、交互上的两处补完
+1. 点「电池电流」这一行即可切换 A / mA 显示，原先是藏在设置页里的一项。
+2. 「基础档位」行带 chevron，点进充电设置页；权限缺失、ERROR 状态在
+   ControlGroup 内就地显示为红色行，不再弹独立错误卡。
+
+功能无删减：快充开关、基础档位、保活、电流限流、检测面板全部参数、两类记录、
+两张曲线、CSV 导出、通知监听、一键恢复、关闭屏幕显示全部保留，
+「高功率保活」即原 Level 0 入口（合并进快充控制组作为第三个开关），
+129 项单测条数与 beta33 完全一致。
