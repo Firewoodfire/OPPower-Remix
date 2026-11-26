@@ -1,0 +1,101 @@
+OPPower 1.0.0-beta37 构建说明
+=============================
+
+产物
+----
+OPPower-1.0.0-beta37-debug.apk            38,335,874 B   debug key 签名，可直接安装
+OPPower-1.0.0-beta37-release-unsigned.apk  3,352,104 B   R8 + 资源压缩，未签名
+
+package      com.oppower
+versionCode  37
+versionName  1.0.0-beta37
+minSdk       34
+targetSdk    37
+compileSdk   37.2
+
+这一版做了什么
+--------------
+把「关于 OPPower」整页换成 ColorOS 17 关于页的范式：大标题折叠顶栏 + 封面卡 + 无标题分组。
+参照对象是 COUI 官方 demo 的 about 页（demo/src/main/java/com/itos/coui/demo/DemoAboutHero.kt
+与 DemoSettingsPage.kt）。
+
+缺的组件
+--------
+项目之前一直用固定高度的 TopAppBar，所以关于页的标题只能是 18sp 小标题。
+demo 那一页用的是 LargeTopAppBar + CouiTopAppBarDefaults.exitUntilCollapsedScrollBehavior：
+
+  - 展开时标题按 CouiTextKind.HomeTitle 排（40sp semibold），压在正文上方
+  - 向上滚动后收成顶栏 18sp 小标题，顶栏高度连续变化
+  - 正文靠 behavior.state.contentPadding(innerPadding, density) 拿到动态顶内边距，
+    滚动时既不被顶栏挡住，也不会跳变
+  - canScroll 传的是"正文超过一屏"，短页面不折叠，避免一进来标题就被抽走
+
+这个组件 COUI 里本来就有，只是项目没用。ui/CouiKit.kt 现在给 CouiPage 加了
+largeTitle 开关，内部就是上面这套；关于页传 largeTitle = true。其余页面保持原样。
+
+素材
+----
+封面用的动画来自 demo 安装包（com.itos.coui.demo 0.0.1-alpha11）里的 res/kz.mp4：
+4 秒、1080×1080、30fps、无声，画面从深紫渐变到橙紫的 S 形分界，也就是截图里那张。
+
+原文件码率 7.3 Mbps（3,650,928 B），对渐变画面完全过剩。用 LibOpenH264 重编码到
+1.6 Mbps 后 438,414 B，PSNR 49.04 dB（y 49.48），逐帧看过没有色带和块状伪影。
+放在 res/raw/about_hero.mp4。
+
+首帧和末帧抽出来转成 720×720 webp（3,714 B / 15,724 B），放在 drawable-nodpi，
+分别用作起播占位和暂停/播完后的静态图 —— 这是 demo 的做法，避免起播瞬间的黑底。
+
+播放实现（ui/AboutHero.kt）
+---------------------------
+TextureView + MediaPlayer，生命周期跟着 ViewTreeLifecycleOwner：
+onResume 起播、onPause 切末帧、onDetachedFromWindow 释放。
+isForceDarkAllowed = false，否则深色主题下系统会把普通 View 反色，画面被压暗。
+MEDIA_INFO_VIDEO_RENDERING_START 到达后隐藏占位图，所以在真实出画前不会闪黑。
+
+与 demo 的差别：不引 demo 的 about_hero_logo 位图（那是 ColorOS 的商标素材），
+品牌字改成 Compose 的 Text 叠在 AndroidView 之上 —— OPPower / ColorOS 亮屏快充控制 /
+基于 LLPower 二改得来 / 右下角版本号。
+
+关于页新结构
+------------
+  LargeTopAppBar   「关于 OPPower」+ 返回
+  AboutHero        328dp 高、左右 16dp、28dp 超椭圆圆角
+  Group(无标题)    版本 / 适用设备 / 网络与上传
+  Group「说明与许可」  重要说明 / 开发者说明 / 开源许可
+  Group「反馈」      QQ 群 + 脚注
+
+原来的 30sp 自绘标题卡删掉了 —— 那层卡片的职责已经由大标题顶栏承担。
+
+顺带清理
+--------
+GeneralSettingsPage 里有 4 处对非空接收者的冗余 !!（ChargerCapability、BatteryHealth ×3），
+编译器一直报 warning，这次一并去掉。现在编译零警告。
+
+验证结果
+--------
+:app:assembleDebug          PASS
+:app:assembleRelease        PASS（R8 + 资源压缩）
+:app:testDebugUnitTest      129 / 129 PASS
+:app:lintDebug              0 error / 0 warning（No issues found.）
+
+体积
+----
+beta36 → beta37：debug 37,844,381 → 38,335,874（+491 KB），
+                 release 2,843,898 → 3,352,104（+508 KB）
+增量就是压缩后的封面视频 428 KB 加两张占位图 19 KB。
+
+未验证
+------
+容器内没有 /dev/kvm，跑不了模拟器。真机重点看：
+
+  1. 大标题折叠：从 40sp 收到 18sp 的过程是否连续、有没有文字跳位
+  2. 封面视频起播前是否会闪一下深色底（占位图应该盖住）
+  3. 深色/浅色主题下白字在视频上的对比度，尤其末帧橙色区域
+  4. 退出页面再进入，视频是否会因为 finished 标记而不重播（当前行为：会重播，
+     因为 View 重建；但如果只是切后台回来，会停在末帧）
+  5. 低端机上 TextureView + MediaPlayer 在页面转场期间是否掉帧
+
+素材版权
+--------
+res/raw/about_hero.mp4 及其抽帧来自 COUI demo，是 ColorOS 的视觉素材。
+本项目为个人二改、非商业使用；若要公开发布，建议换成自有封面。
