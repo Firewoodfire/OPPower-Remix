@@ -1,0 +1,27 @@
+OPPower 1.0.0-beta29
+versionCode: 29
+versionName: 1.0.0-beta29
+Build: debug
+Built: 2026-11-23 03:30:00 +08:00
+APK: OPPower-1.0.0-beta29-debug.apk
+Size: 10910610 bytes
+SHA-256: DC6E44CABB0E7D264D35C025DB30544365DA4ECEBEC45D00ED86F3215F8EB148
+
+Changes:
+- Charging detection modeled after Scene's information layering: speed first,
+  then why it is slow, then battery health. Reads a read-only sysfs
+  power_supply snapshot through a new whitelisted Shizuku command.
+- UI rebuilt on COUI-Kit's published ColorOS 17 metrics, implemented locally
+  instead of consuming the AAR (which requires compileSdk 37.1 + AGP 9.1).
+- Settings gained search, charging detection controls, notification style,
+  list density, CSV export and full reset. Every new option is wired to real
+  behavior; no placeholder switches.
+- Fixed foreground service lifecycle crash and interrupted safety restore.
+- Idle backoff, screen-on gating for safety restore retries, Shizuku rebind on
+  binder death, storage accounting now includes the 24h history database.
+
+Validation:
+- 90 JVM unit tests passed (0 failures, 0 errors, 0 skipped).
+- Android lint passed with 0 errors, 20 warnings, 1 hint (all pre-existing).
+- Debug Kotlin compilation and Release R8 build both passed.
+- Debug APK built, signed and archived successfully.
