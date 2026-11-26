@@ -1,0 +1,81 @@
+OPPower 1.0.0-beta39 构建说明
+=============================
+
+产物
+----
+OPPower-1.0.0-beta39-debug.apk            38,352,262 B   debug key 签名，可直接安装
+OPPower-1.0.0-beta39-release-unsigned.apk  3,496,492 B   R8 + 资源压缩，未签名
+
+package      com.oppower
+versionCode  39
+versionName  1.0.0-beta39
+minSdk       34
+targetSdk    37
+compileSdk   37.2
+
+主页标题为什么之前不是 C17 风格
+------------------------------
+不是漏了组件，是我上一版只把 LargeTopAppBar 用在了关于页，主页仍用固定高度的
+TopAppBar。固定顶栏里标题只能按 CouiTextKind.TopBar 排（18sp / 550），
+所以截图里那颗小标题是"顶栏标题"，不是"首页标题"。
+
+ColorOS 17 首页的标题是 32sp 大标题，向下滚动才收成顶栏小标题。COUI 里对应的是
+LargeTopAppBar：
+
+  CouiTopAppBarDefaults.expandedHeight = titleOnlyHeight = 110.dp
+  CouiCollapsingAppBarDefaults.expandedTitleSize = 32.dp
+  CouiCollapsingAppBarDefaults.collapsedTitleSize = 24.dp
+  CouiCollapsingAppBarDefaults.collapsedTitleHeight = 52.dp
+  标题样式兜底 = CouiTopAppBarDefaults.expandedTitleTextStyle()
+               = rememberCouiSystemTextStyle(CouiTextKind.HomeTitle)  // 40sp semibold
+
+这一版把主页顶栏换成 LargeTopAppBar，展开态取 COUI 的 HomeTitle 样式（40sp），
+滚动收起到 24sp / 52dp。截图里"OPPower"那颗 18sp 小标题不再出现。
+
+改动点
+------
+MainPage.kt：
+
+  val scrollState = rememberLazyListState()          // 之前是隐式的，现在显式持有
+  val behavior = CouiTopAppBarDefaults.exitUntilCollapsedScrollBehavior(
+      canScroll = { scrollState.canScrollForward || scrollState.canScrollBackward })
+
+  Scaffold(modifier = ... .nestedScroll(behavior.nestedScrollConnection), topBar = { LargeTopAppBar(...) })
+  { innerPadding ->
+      val contentPadding = behavior.state.contentPadding(innerPadding, density)
+      LazyColumn(state = scrollState, modifier = Modifier.padding(contentPadding))
+  }
+
+两处必须做对，否则会出问题：
+
+1. nestedScroll(behavior.nestedScrollConnection) 不能漏。漏了 LazyColumn 会自己吃掉
+   所有滚动手势，顶栏永远不折叠。
+2. 正文顶距必须是 behavior.state.contentPadding(innerPadding, density)，不能直接用
+   innerPadding。折叠过程中顶栏高度在 110dp → 52dp 之间连续变化，静态内边距会导致
+   滚动初期内容被顶栏压住。
+
+canScroll 判断用的是 canScrollForward || canScrollBackward，意思是"列表能滚就允许折叠"。
+只写 canScrollForward 的话，一旦折到底、内容又被挤出屏幕，顶栏会突然自己弹回去。
+
+验证结果
+--------
+:app:assembleDebug          PASS
+:app:assembleRelease        PASS（R8 + 资源压缩）
+:app:testDebugUnitTest      129 / 129 PASS
+:app:lintDebug              0 error / 0 warning（No issues found.）
+Kotlin 编译                    0 warning
+
+体积
+----
+beta38 → beta39：debug 38,335,878 → 38,352,262（+16 KB），release 不变 3,496,492 B。
+LargeTopAppBar 相关代码本来就在库里（关于页已在用），这次只是多了一个调用点。
+
+未验证
+------
+容器内没有 /dev/kvm，跑不了模拟器。真机重点看：
+
+  1. 首页首屏：40sp 的 OPPower 是否与 ColorOS 17 首页的观感一致
+  2. 向上滚动时标题 40sp → 24sp 的收缩是否平滑，有没有逐帧跳字
+  3. 折叠到底后再向下滚，顶栏能否正常展开（canScroll 双向判断）
+  4. 顶栏展开 110dp 时，第一个分组（实时状态）会不会被顶栏的下边缘压住
+  5. 转场（beta36 的 120ms 叠层）期间，主页大标题与设置页大标题是否同时出现两份
