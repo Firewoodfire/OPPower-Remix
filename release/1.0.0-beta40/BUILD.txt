@@ -1,0 +1,86 @@
+OPPower 1.0.0-beta40 构建说明
+=============================
+
+产物
+----
+OPPower-1.0.0-beta40-debug.apk            38,352,262 B   debug key 签名，可直接安装
+OPPower-1.0.0-beta40-release-unsigned.apk  3,398,188 B   R8 + 资源压缩，未签名
+
+package      com.oppower
+versionCode  40
+versionName  1.0.0-beta40
+minSdk       34
+targetSdk    37
+compileSdk   37.2
+
+这一版做了什么
+--------------
+没有加新界面。这一版是在等真机反馈期间自己回头做的一次"欠账清理"：
+把之前几轮被增量编译缓存掩盖掉的警告全部找出来清掉，顺手补了主页的起始留白。
+
+上一版我报告的是「Kotlin 编译 0 warning」，那是增量构建的结果——只重编了改动的文件，
+其余带警告的编译单元复用了缓存。这次用 --rerun-tasks 强制全量重编，暴露出 3 条警告。
+
+1) 废弃 API：BasicTextField(value/onValueChange)
+   位置：ChargeSettingsPage.kt 的规则编辑行（温度 / 电量阈值输入框）
+   迁移：value/onValueChange → rememberTextFieldState + snapshotFlow + TextFieldLineLimits.SingleLine
+   与 beta38 里 CouiSearchField 的迁移保持同一套写法：
+     val fieldState = rememberTextFieldState(initialText = input)
+     LaunchedEffect(fieldState) { snapshotFlow { fieldState.text.toString() }.collect { onInput(it) } }
+     LaunchedEffect(input) { if (input != fieldState.text.toString()) fieldState.edit {
+         replace(0, length, input); placeCursorBeforeCharAt(input.length) } }
+   第二条 LaunchedEffect 是必要的：点「恢复默认」时外部把 input 改回去，输入框必须跟着走，
+   否则界面上还是旧数字。这与 beta38 搜索框那段是同一个坑。
+
+2) 冗余非空断言：ChargingController.kt:430
+   (now - lastAttempt!!)  →  (now - lastAttempt)
+   外层已经有 `lastAttempt == null ||` 短路，编译器能推断出非空。
+
+3) 冗余安全调用：MainViewModel.kt:167
+   shared?.snapshot  →  shared.snapshot
+   sharedIsFresh 为真的前提就是 shared != null，编译器同样能推断。
+
+4) 删除 3 处未使用的 import androidx.compose.material3.AlertDialog
+   MainPage.kt / OPPowerApp.kt / GeneralSettingsPage.kt
+   三个文件的弹窗都已经换成 com.itos.coui.dialog.Dialog，M3 的 AlertDialog 早就不用了。
+
+5) 主页列表补 8dp 起始留白
+   LazyColumn 的 contentPadding 从 bottom only 改为 top = 8.dp, bottom = 30.dp。
+   大标题展开时正文从标题下方开始画，第一行贴着标题会显得挤；补一点留白后更接近
+   ColorOS 17 首页那种标题与首张卡片之间的呼吸感。
+
+体积为什么掉了
+--------------
+beta39 → beta40：release 3,496,492 → 3,398,188 B（-98,304 B，约 -2.8%）
+debug 不变 38,352,262 B。
+
+release 变小主要来自两处：
+  - BasicTextField 旧重载的引用链路被彻底断开，R8 少留一组装饰相关类
+  - 3 个文件里未使用的 M3 AlertDialog 导入消失后，R8 的入口分析更干净
+
+debug 没变是因为没删代码、没动资源，dex 结构一样。
+
+验证结果
+--------
+:app:assembleDebug --rerun-tasks        PASS   0 warning
+:app:assembleRelease                    PASS   R8 + 资源压缩
+:app:testDebugUnitTest                  129 / 129 PASS（0 skipped / 0 failed / 0 error）
+:app:lintDebug                          0 error / 0 warning（No issues found.）
+
+这次所有编译结论都来自强制全量重编，不是增量缓存。
+
+未验证
+------
+容器内没有 /dev/kvm，跑不了模拟器。真机重点看：
+
+  1. 充电设置 → 规则 → 温度 / 电量阈值输入框，能否正常输入小数点、删空、恢复默认
+     （这是本版唯一改到行为的地方）
+  2. 输入框里连续改数字，光标位置是否稳定（不会跳到最前或最后）
+  3. 软键盘弹出时，输入框不会被顶出可视区
+  4. 首页首屏：大标题与第一张卡片之间的留白是否合适（新加的 8dp）
+
+beta36 ~ beta39 的待复验点仍然有效，累计如下：
+  5. 页面转场：顶层三页推入/回位方向对不对，设置内部二级页是否同向
+  6. 关于页封面视频：首帧是否有黑闪，播完是否停在最后一帧
+  7. 设置行图标：26dp 圆角底 + 16dp 图标在你的屏幕密度下会不会糊
+  8. 主页大标题折叠：40sp → 24sp 收缩是否平滑，折到底再回滚能否展开
