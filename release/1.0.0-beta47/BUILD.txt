@@ -1,0 +1,105 @@
+OPPower 1.0.0-beta47 构建说明
+================================
+
+把应用字体换成 OPPO Sans。
+
+为什么不是"打包字体文件"
+------------------------
+一个中文字重的 OPPO Sans 约 9 MB，四个字重将近 36 MB。release 包现在
+3.5 MB，打完变 40 MB——为了字体付十倍体积，不划算，而且分发第三方字体
+还要带上授权声明。
+
+ColorOS 把 OPPO Sans 装在 /system/fonts，普通应用对那个目录有读权限。
+直接从系统读有三个好处：
+
+1. 零体积增加。
+2. 字形和 ColorOS 设置页、通知栏完全一致——同一份文件，不存在"应用内
+   比系统细一档"。
+3. 不受主题商店影响。用户若换了第三方字体，应用仍用原厂 OPPO Sans。
+
+实现
+----
+新增 `ui/OppoFont.kt`：
+
+    private val FAMILY_MARKERS = listOf("opposans", "oplussans")
+    private val WEIGHT_KEYWORDS = listOf(
+        "extralight" to 200, "extrabold" to 800, "semibold" to 600, ...
+        "regular" to 400, "medium" to 500, "bold" to 700, ...
+    )
+
+    val family: FontFamily by lazy {
+        FontFamily(*selectFaces(FONT_DIR.list()).map { (weight, name) ->
+            Font(file = File(FONT_DIR, name), weight = FontWeight(weight))
+        }.toTypedArray())
+    }
+
+关键是 `selectFaces` 抽成了纯函数，能跑 JVM 单测：真机字体文件名在 ColorOS
+版本间换过好几轮（OPPOSans-R / OPlusSans-Regular / OPlusSans3-Regular），
+把选择规则钉在测试里，改规则不用等真机。
+
+注入点是 `ui/Theme.kt`：
+- COUI 侧走 `CouiTheme(typography = CouiTypography(...))`，body / label /
+  menuItem 三个基础项换族，六个可空 dialog 族也一并填上——那些字段默认
+  null，null 会让弹窗标题落到 Material 默认字体，出现同页两套字形。
+- Material 侧走 `MaterialTheme(typography = ...)`，15 个 role 全换，因为
+  项目里还有少量 material3 Text。
+
+踩到的坑：`OPlus Sans` 的小写是 `oplussans`，不是 `oplusans`
+------------------------------------------------------------
+`OPlus` 结尾的 s 和 `Sans` 开头的 s 连在一起，中间没有分隔符。
+
+我第一版按 `oplusans` 写，测试直接炸——四条用例全返回空列表。一开始以为
+是 `Sequence.mapNotNull` 的标签写错了，改成 for 循环还是空，最后把中间
+状态打进断言消息才看见：
+
+    base=[oplussans3-regular] len=18 opposans=false oplusans=false
+
+族名比预期多一个 s。这种错靠读代码看不出来，只能靠测试把实际值摊开。
+
+现在 `matchesColorOsFamilyNameWithDoubledS` 这条用例专门守它。
+
+失败会怎样
+----------
+整个查找包在 runCatching 里，任何一步失败——目录不可读、没有匹配文件、
+字重名不认识——都回落到 FontFamily.SansSerif。设备上没有 OPPO 字体时
+应用照常启动，只是字体退化成系统默认，不会崩。
+
+设置页可以看见结果
+------------------
+设置 → 外观设置 → 界面字体：
+- 找到时显示「OPPO Sans」，footer 列出每个字重对应的实际文件名；
+- 没找到时显示「系统默认（未找到 OPPO Sans）」并附原因。
+
+验证
+----
+:app:assembleDebug --rerun-tasks   PASS，0 warning
+:app:assembleRelease               PASS（R8 + 资源压缩）
+:app:testDebugUnitTest             151 / 151 PASS（新增 10 条）
+:app:lintDebug                     0 error / 0 warning
+
+新增用例（OppoFontTest，10 条）：
+- 三个字重全识别、繁体让位简体、排除 NotoSans/Roboto/DroidSansMono、
+- SemiBold 判 600 不是 700、ExtraLight 判 200 不是 300、
+- 大小写不敏感、无字重语义的文件跳过、空输入返回空、同字重去重、
+- OPlusSans 双 s 家族名匹配。
+
+产物
+----
+OPPower-1.0.0-beta47-debug.apk             38,434,178 bytes
+OPPower-1.0.0-beta47-release-debugkey.apk   3,504,243 bytes（可安装）
+OPPower-1.0.0-beta47-release-unsigned.apk   3,485,500 bytes（未签名）
+
+debug 比 beta46 多 16,380 B，release 多 16,743 B——都是新增的 Kotlin 代码
+和几条字符串，没有资源打包进来。
+
+装完要看的地方
+--------------
+1. 设置 → 外观设置 → 界面字体：应该显示「OPPO Sans」，footer 里有具体文件名。
+   如果显示「系统默认」，把 footer 那行贴给我，我改匹配规则。
+2. 全局观感：正文是否和 ColorOS 设置页一致，标题字重是否比之前更实。
+3. 大标题（LargeTopAppBar 折叠标题）有没有变细或者跳字重——这一处 COUI
+   有特殊的字重补偿逻辑，我没有真机验证过。
+4. 万一某个页面出现文字被裁切（OPPO Sans 字面比 Roboto 略宽），截图给我，
+   我调该处的字号或行高。
+
+顺带：热控诊断的结果我还在等，beta47 没动那部分代码。
