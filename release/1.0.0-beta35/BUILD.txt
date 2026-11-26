@@ -1,0 +1,80 @@
+OPPower 1.0.0-beta35 构建说明
+=============================
+
+产物
+----
+OPPower-1.0.0-beta35-debug.apk            37,827,997 B   debug key 签名，可直接安装
+OPPower-1.0.0-beta35-release-unsigned.apk  2,811,130 B   R8 + 资源压缩，未签名
+
+package      com.oppower
+versionCode  35
+versionName  1.0.0-beta35
+minSdk       34
+targetSdk    37
+compileSdk   37.2
+
+这一版做了什么
+--------------
+上一版（beta34）仍然是自己照着 COUI 的度量重写了一遍组件，只是把结构改成了
+"组 + 行"。这一版把 ui/coui/ 下 5 个文件、约 1000 行仿制实现**整体删除**，
+改为直接依赖 Maven Central 上已发布的库：
+
+    implementation("io.github.itoseo:coui:$couiVersion")        // 0.0.1-alpha16
+    implementation("io.github.itoseo:coui-icons:$couiVersion")
+
+界面全部走库的公开 API：
+  layout.Group / Item / Divider / Footer / Scaffold
+  text.Text + rememberCouiTextStyle(CouiTextKind.xxx)
+  switch.Switch / CouiSwitchDefaults
+  slider.Slider
+  segmentbutton.SegmentedControl
+  dialog.Dialog / CouiDialogAction
+  topappbar.TopAppBar / TopAppBarButton
+  shape.CouiShape / CouiCapsuleShape
+  theme.CouiTheme + CouiColorScheme
+
+ui/CouiKit.kt 保留，但只剩参数预设（与 COUI 官方 demo 的 DemoPreferenceRows.kt
+同一做法）：CouiRow = Item + 两个 Text + Next 图标；CouiSwitchRow = Item + Switch；
+CouiPage = Scaffold + TopAppBar + couiVerticalScroll。项目里不再有第二套度量。
+
+工具链迁移（不迁移就消费不了这个 AAR）
+--------------------------------------
+Gradle        8.13     -> 9.6.0   （wrapper 指向腾讯云镜像；官方源 307 后不可达）
+AGP           8.10.1   -> 9.4.1
+Kotlin        2.1.21   -> 2.4.20  （Compose 编译器插件）
+SDK           36       -> 37.2
+minSdk        26       -> 34
+AGP 9 内置 Kotlin 支持，因此 org.jetbrains.kotlin.android 插件必须移除，
+否则报 "no longer required for Kotlin support since AGP 9.0"。
+
+遇到的坑
+--------
+1. minSdk 必须 34：TopAppBarButton 与 SegmentedControl 的 lint 声明为 API 34。
+2. CouiPageColors 只有 background/card/title/summary/disabled/accent/divider，
+   没有 danger/secondary/isDark/accentSurface，这些在 CouiKit.kt 里用扩展属性补齐。
+3. @Composable get() 扩展属性在非组合 getter 里不可用，CouiType 的角色改成
+   @Composable fun xxx(): TextStyle。
+4. 上一版顶部栏是自己画的，TopAppBarButton 在顶栏作用域外拿不到
+   LocalCouiToolbarBackdrop，会失去模糊采样。现在统一用 Scaffold + TopAppBar。
+5. 「列表密度」选项删除：COUI 行高固定 48dp，密度不再可控；
+   「界面比例」的说明改为"COUI 组件行高固定 48dp，这里整体缩放界面与字号"。
+
+体积代价
+--------
+debug    10.8 MB -> 37.8 MB（AAR 带完整渲染器与字重）
+release   1.65 MB -> 2.83 MB（R8 + isShrinkResources）
+
+验证结果
+--------
+:app:compileDebugKotlin     PASS
+:app:assembleDebug          PASS
+:app:assembleRelease        PASS（R8 + 资源压缩）
+:app:testDebugUnitTest      129 / 129 PASS
+:app:lintDebug              0 error / 0 warning
+
+未验证
+------
+容器内没有 /dev/kvm，无法启动模拟器，UI 的实际渲染只能真机确认。重点看三处：
+  顶栏的渐进模糊是否真的采样到正文
+  TopAppBarButton 在深色主题下的轮廓高光
+  Group 的 24dp 圆角在 480dpi 下的实际观感
