@@ -1,0 +1,30 @@
+OPPower 1.0.0-beta31
+====================
+
+versionCode : 31
+versionName : 1.0.0-beta31
+构建日期    : 2026-11-23
+
+产物
+----
+OPPower-1.0.0-beta31-debug.apk            10,910,669 bytes（debug 签名，可直接安装）
+OPPower-1.0.0-beta31-release-unsigned.apk  1,654,666 bytes（未签名，需自备 keystore）
+
+工具链
+------
+JDK 17 / Android SDK 36（compileSdk 36, minSdk 26）/ Gradle 8.13 / AGP 8.10.1 / Kotlin 2.1.21
+
+验证
+----
+:app:testDebugUnitTest   90 passed, 0 failed
+:app:lintDebug           0 errors, 21 warnings, 1 hint
+
+本次改动
+--------
+按 COUI-Kit（MPL 2.0）的源码结构重做界面层：
+- 新增 ui/coui/ 五文件设计系统（超椭圆形状、度量、主题、按压反馈、组件）
+- 主题改为 CompositionLocal 下发，修掉"切主题被弹回首页"
+- 快充设置页与主页面改为 CouiGroup / CouiRow 分组语义
+- 删除 ui/CouiUi.kt
+
+功能零删减：单测条数与 beta29 一致（90 项）。
