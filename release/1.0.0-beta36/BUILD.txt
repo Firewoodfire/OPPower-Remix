@@ -1,0 +1,82 @@
+OPPower 1.0.0-beta36 构建说明
+=============================
+
+产物
+----
+OPPower-1.0.0-beta36-debug.apk            37,844,381 B   debug key 签名，可直接安装
+OPPower-1.0.0-beta36-release-unsigned.apk  2,843,898 B   R8 + 资源压缩，未签名
+
+package      com.oppower
+versionCode  36
+versionName  1.0.0-beta36
+minSdk       34
+targetSdk    37
+compileSdk   37.2
+
+这一版做了什么
+--------------
+给页面层级之间加了转场动画。新增 ui/PageTransition.kt，两处接入：
+
+1. 顶层三页（主页 / 充电设置 / 设置）——OPPowerApp.kt
+2. 设置内部十余个二级页——GeneralSettingsPage.kt 的 SettingsRouter
+
+方向由页面层级决定：目标层级更深就从右侧推入（前进），更浅就从左侧回位（返回）。
+同层级按前进处理。
+
+COUI 没有页面级导航组件（navigation 包里的 NavigationBar 是底部导航，
+CouiFabExpansion 是浮动按钮展开），所以容器用 Compose 的 AnimatedContent，
+但动效参数直接对齐库：进入 CubicBezierEasing(.3f, 0f, .1f, 1f)、
+退出 CubicBezierEasing(.3f, 0f, 1f, 1f)，与 CouiDialogDefaults 的
+enterEasing / exitEasing 是同一条曲线，没有另造节奏。
+
+参数
+----
+进入        240ms   位移 1/8 屏宽（412dp 屏约 51dp）+ 淡入
+淡入        130ms   alpha 单独提前走完
+退出        120ms   纯淡出，不位移
+
+为什么退出比进入短很多
+----------------------
+主页是 LazyColumn，设置页是整棵子树都组合的 Column（不是懒加载），两页同时存在时
+绘制成本翻倍。beta34 之前的代码里留过一句注释，说等长的 crossfade 在真机上能看出
+一顿，所以后来改成了直接 when 硬切。这次把退出收到 120ms（约 7 帧），叠层只发生在
+进入动画的前半段，其余时间只有一页在画。
+
+淡入为什么比位移短
+------------------
+如果新页也花 240ms 才不透明，旧页在 120ms 消失的那一刻新页还是半透明，底下会露出
+页面底色闪一下。把 alpha 压在 130ms 内走完，两者重叠后新页已经实心，剩下的位移就
+只是几何变换。
+
+顺带修的体验问题
+----------------
+每页的 rememberSaveable 状态（主页列表滚动位置、展开项、搜索词）现在由
+SaveableStateHolder 按页 key 存取。以前每次从设置返回主页，列表都会跳回顶部。
+
+新增依赖
+--------
+implementation("androidx.compose.animation:animation:1.13.0")
+显式声明，不吃 foundation / material3 的传递依赖。
+
+验证结果
+--------
+:app:assembleDebug          PASS
+:app:assembleRelease        PASS（R8 + 资源压缩）
+:app:testDebugUnitTest      129 / 129 PASS
+:app:lintDebug              0 error / 0 warning（No issues found.）
+
+未验证
+------
+容器内没有 /dev/kvm，跑不了模拟器，动画的实际观感只能真机确认。重点看：
+
+  1. 设置页（整棵子树组合）在 120ms 叠层期间是否掉帧，尤其低端机
+  2. 快速连点「设置」再「返回」时，转场是否被正确打断而不是卡在半路
+  3. 返回主页后列表滚动位置是否真的保住了（LazyColumn 没有显式 LazyListState，
+     靠 rememberLazyListState 的默认 rememberSaveable 恢复）
+  4. 深色主题下 51dp 的位移是否露出可见的黑边
+
+后续可做
+--------
+预测返回（predictive back）：minSdk 34 已支持，但需要把 BackHandler 换成
+PredictiveBackHandler，并让手势进度直接驱动页面位移。当前的 AnimatedContent
+是时间驱动的，接手势要改成手写容器，属于独立工作项。
