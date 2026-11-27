@@ -250,6 +250,26 @@ class PrivilegedCommandService @Keep constructor() : IPrivilegedCommandService.S
     }
 
     /**
+     * 双电芯判定：设备树里的 `oplus,batt_num` 是厂商烧在 dtb 里的电芯数，
+     * 比 `power_supply` 的目录布局可靠得多。应用域通常进不去
+     * `/sys/firmware/devicetree/base`，shell 域在多数 ColorOS 上可以。
+     *
+     * 属性是 4 字节大端整数（值小的固件也常写成 1 字节），取最后一个非零字节
+     * 即低字节。返回值限制在 1…4，其余一律当作读不到，避免把垃圾字节当成结论。
+     */
+    @Throws(RemoteException::class)
+    override fun readDeviceCellCount(): Int = runCatching {
+        val file = File(DEVICE_TREE_BATT_NUM)
+        if (!file.isFile || !file.canRead()) return@runCatching -1
+        val value = file.readBytes()
+            .lastOrNull { it.toInt() != 0 }
+            ?.toInt()
+            ?.and(0xFF)
+            ?: return@runCatching -1
+        if (value in 1..4) value else -1
+    }.getOrDefault(-1)
+
+    /**
      * 找出 argv[0] 的 basename 里含 [keyword] 的进程，返回去重后的名字。
      *
      * 只取 argv[0] 是刻意的：`/proc/<pid>/cmdline` 里参数也用 `\0` 分隔，
@@ -383,6 +403,9 @@ class PrivilegedCommandService @Keep constructor() : IPrivilegedCommandService.S
         const val BATTERY_DUMP_TIMEOUT_MILLIS = 1_500L
         const val COMMAND_TIMEOUT_MILLIS = 8_000L
         const val BATTERY_VOLTAGE_PATH = "/sys/class/power_supply/battery/voltage_now"
+
+        /** 设备树里的电芯数属性。只有这一个节点走特权读取。 */
+        const val DEVICE_TREE_BATT_NUM = "/sys/firmware/devicetree/base/oplus,batt_num"
         const val MAX_PRIVILEGED_CURRENT_MA = 20_000f
         const val PROP_HORAE_ENABLE = "persist.sys.horae.enable"
         const val PROP_INIT_SVC_HORAE = "init.svc.horae"
