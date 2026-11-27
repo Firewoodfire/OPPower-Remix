@@ -3,6 +3,7 @@ package com.oppower.data
 import android.content.Context
 import androidx.core.content.edit
 import com.oppower.model.BaseTier
+import com.oppower.battery.DeviceProfiles
 import com.oppower.model.ControlRules
 import com.oppower.model.RuntimeSettings
 import com.oppower.model.TierRule
@@ -14,6 +15,7 @@ import com.oppower.model.ThemePalette
 import com.oppower.model.UiDensity
 
 class PreferencesStore(context: Context) {
+    private val appContext = context.applicationContext
     private val prefs = context.getSharedPreferences("oppower", Context.MODE_PRIVATE)
 
     fun load(): RuntimeSettings {
@@ -76,7 +78,12 @@ class PreferencesStore(context: Context) {
             notificationAutoCloseOnFull = prefs.getBoolean("notify_close_full", true),
             notificationAutoCloseOnScreenOff = prefs.getBoolean("notify_close_screen_off", false),
             invertCurrentSign = prefs.getBoolean("invert_current_sign", false),
-            doubleCellCorrection = prefs.getBoolean("double_cell_correction", false),
+            // 首次安装时按探测结果给默认值：双芯机不修正，功率只有实际的一半。
+            // 用户改过之后以用户为准（save 会写下这个 key）。
+            doubleCellCorrection = prefs.getBoolean(
+                "double_cell_correction",
+                DeviceProfiles.get(appContext).isDualCell,
+            ),
             virtualVoltage = prefs.getBoolean("virtual_voltage", false),
             absoluteCurrentPowerDisplay = prefs.getBoolean("absolute_current_power", false),
             debugMode = prefs.getBoolean("debug_mode", false),
@@ -162,6 +169,19 @@ class PreferencesStore(context: Context) {
     fun markIntroSeen() {
         prefs.edit { putBoolean("intro_seen", true) }
     }
+
+    /**
+     * 用户在硬件页亲手动过双芯开关。
+     *
+     * 记这个标记是因为探测分两步：启动时先按 `power_supply` 的目录布局猜，
+     * 拿到 Shizuku 权限后再读设备树纠正。没有标记的话，后一步会把用户刚关掉的
+     * 开关又打开一遍。
+     */
+    fun markDoubleCellUserSet() {
+        prefs.edit { putBoolean("double_cell_user_set", true) }
+    }
+
+    fun doubleCellUserSet(): Boolean = prefs.getBoolean("double_cell_user_set", false)
 
     /** 恢复默认值，但保留首次启动说明的已读标记，避免重置后再弹一次。 */
     fun resetAll() {
