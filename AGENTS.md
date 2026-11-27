@@ -53,6 +53,7 @@
 | beta52 | 39,440,529 | 3,537,067 |
 | beta53 | 38,499,718 | 3,537,067 |
 | beta54 | 38,483,330 | 3,520,683 |
+| beta55 | 38,499,714 | 3,520,683 |
 
 debug 每版增长约 16 KB 属正常（新增代码 + 内联字符串）。一次涨超过 200 KB 要查是不是误打包了资源。
 
@@ -79,6 +80,10 @@ debug 每版增长约 16 KB 属正常（新增代码 + 内联字符串）。一�
 - **设置页搜索框放正文顶部**：beta52 曾误判 search 槽是闪退原因（它内部确有若干依赖测量时序的 `checkNotNull`），真机栈证明不是——真凶是上一条的浮层按钮。search 槽本身能用，只是正文顶部少一条时序依赖。判断 bug 时先要栈，别靠 diff 猜。
 - **`TextFieldBuffer.placeCursorBeforeCharAt` 不接受空串位置**：`BasicTextFieldState.edit { replace(0, length, ""); placeCursorBeforeCharAt(0) }` 抛 `IndexOutOfBoundsException`，点「清空搜索」就走这条。改成 `selection = TextRange(value.length)`，空串也合法。
 - **崩溃记录只放在「设置 → 数据管理」**（beta54 起按用户要求）：`CrashRecorder` 仍在后台写盘，但**启动时不要弹提示条**——闪退修好之后每次启动都弹一条旧记录只会烦人。`CrashRecorder.markLocation()` 仍会把「崩在哪一页」写进栈里，需要时去数据管理页复制。
+- **机型判断必须探测，不要写死**（beta55）：`RMX8899` 曾在三处文案里硬编码，换机就全错。现在 `battery/DeviceProfile.kt` 负责探测，三条通道按可靠性排序——设备树 `oplus,batt_num`（走 Shizuku 只读通道，应用域进不去 `/sys/firmware/devicetree/base`）→ `power_supply` 目录布局（有 `battery2`，或 `main` 带 `capacity`）→ `UNKNOWN`。判不出来时**宁可 UNKNOWN 也不要猜双芯**：单芯机误开双芯修正是功率翻倍，比少算一半更容易误导用户。
+- **`oplus,batt_num` 是 4 字节大端，但取最后一个非零字节就够了**：值小的固件写成 `00 00 00 02`，也有只写 1 字节的。超出 1…4 的字节是错位读到别的属性，直接丢弃。`parseCellCount` 有单测覆盖这几种形态。
+- **双芯默认值不能写进 `RuntimeSettings` 的构造参数**：`load()` 跑在主线程，为了一个布尔值去等 Shizuku 会卡首帧。做法是在 `PreferencesStore.load()` 里用 `DeviceProfiles.get()` 的进程内缓存取默认值；Shizuku 授权后的设备树结果由 `MainViewModel.refineDeviceProfile()` 异步补读，且只在 `doubleCellUserSet()` 为 false 时才改写设置——否则用户刚关掉的开关会被重新打开。
+- **`CellStructure.UNKNOWN` 不要写进缓存**：这种结果多半是权限还没到位，存下来就等于把「不知道」永久钉死。`DeviceProfiles.readCache()` 遇到 UNKNOWN 会重新探测（一次几次 `stat`，成本可忽略）。
 - **字体不打包**。一个字重的中文字形约 9 MB，四个字重就是 36 MB，release 包会从 3.5 MB 涨到 40 MB。走 `OppoFont` 读 `/system/fonts`，失败自动回落。
 - 容器里没有 `/dev/kvm`，UI 观感和充电实测**只能真机确认**，不要在交付说明里写成"已验证"。
 
