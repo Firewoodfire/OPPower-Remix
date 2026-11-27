@@ -25,4 +25,10 @@ interface IPrivilegedCommandService {
      * 以及内核报告的实际充电协议。全部为读取，不含任何写入。
      */
     String readThermalDiagnostics() = 8;
+
+    /**
+     * 设备树里写死的电芯数（`oplus,batt_num`）。返回 1 表示单芯、2 表示双芯、
+     * -1 表示读不到。节点路径固定在服务端，调用方传不了路径。
+     */
+    int readDeviceCellCount() = 9;
 }
