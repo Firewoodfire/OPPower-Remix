@@ -42,6 +42,9 @@ import com.itos.coui.icons.CouiIcons
 import com.oppower.BuildConfig
 import com.oppower.CrashRecorder
 import com.oppower.battery.ChargeStage
+import com.oppower.battery.CellStructure
+import com.oppower.battery.DeviceProfiles
+import com.oppower.data.PreferencesStore
 import com.oppower.model.NotificationStyle
 import com.oppower.battery.ChargeInsight
 import com.oppower.model.BatterySnapshot
@@ -843,6 +846,11 @@ private fun HardwareSettingsPage(
     val diagnostics = thermalDiagnostics.value
     val diagnosticsLoading = thermalDiagnosticsLoading.value
     val couiColors = CouiPageDefaults.themeColors()
+    val context = LocalContext.current
+    // 探测结果有进程内缓存，命中后只是一次 volatile 读；不 remember 是为了
+    // 让 Shizuku 精修之后（`DeviceProfiles.refine`）下次进页面能看到新结论。
+    val profile = DeviceProfiles.get(context)
+    val preferences = remember(context) { PreferencesStore(context) }
     CouiPage(title = "硬件修正", subtitle = "兼容不同设备的电池读数", onBack = onBack) {
         Group(title = "电流与功率") {
             CouiSwitchRow(
@@ -864,7 +872,11 @@ private fun HardwareSettingsPage(
                 title = "双芯电池修正",
                 summary = "双电芯机型开启后，电流与功率按两芯合并显示",
                 checked = settings.doubleCellCorrection,
-                onCheckedChange = { value -> onSettingsChange { it.copy(doubleCellCorrection = value) } },
+                onCheckedChange = { value ->
+                    // 记下“这是用户自己定的”，启动后的特权探测不再覆盖。
+                    preferences.markDoubleCellUserSet()
+                    onSettingsChange { it.copy(doubleCellCorrection = value) }
+                },
             )
             Divider()
             CouiSwitchRow(
@@ -876,7 +888,16 @@ private fun HardwareSettingsPage(
         }
         Group(
             title = "当前读数",
-            footer = "当前机型 RMX8899 为单电芯，默认无需开启双芯修正。若读数方向不正确，先尝试“反转电流正负”。",
+            footer = when {
+                profile.isDualCell && settings.doubleCellCorrection ->
+                    "本机探测为双电芯（依据：${profile.detection.label}），电流与功率已按两芯合并显示。"
+                profile.isDualCell ->
+                    "本机探测为双电芯（依据：${profile.detection.label}），建议开启双芯修正，否则功率只显示一半。"
+                profile.cellStructure == CellStructure.SINGLE ->
+                    "本机探测为单电芯（依据：${profile.detection.label}），无需开启双芯修正。若读数方向不正确，先尝试“反转电流正负”。"
+                else ->
+                    "未识别到电池结构。双电芯机型请手动开启双芯修正；单电芯请保持关闭，否则功率会翻倍。"
+            },
         ) {
             CouiRow(
                 "电流",
@@ -1037,6 +1058,7 @@ private fun SystemSettingsPage(
     val insightValue = insightState.value
     val batteryOk = access.batteryUnrestricted
     val notificationOk = access.notificationsReady(usesLiveNotificationChannel())
+    val profile = DeviceProfiles.get(context)
     CouiPage(title = "系统与诊断", subtitle = "后台权限与数据来源", onBack = onBack) {
         Group(
             title = "后台运行",
@@ -1094,7 +1116,9 @@ private fun SystemSettingsPage(
         Group(title = "应用") {
             CouiRow("版本", value = BuildConfig.VERSION_NAME)
             Divider()
-            CouiRow("设备", value = "RMX8899 · ColorOS 17")
+            CouiRow("设备", value = profile.displayName)
+            Divider()
+            CouiRow("电池结构", value = profile.cellLabel)
             Divider()
             CouiRow("网络权限", value = "未申请，数据不上传")
         }
@@ -1298,13 +1322,19 @@ private fun AboutPage(
     onNavigate: (SettingsScreen) -> Unit,
     onJoinQq: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val profile = DeviceProfiles.get(context)
     // 这一页按 ColorOS 17「关于」的范式排：大标题顶栏 + 封面 + 无标题分组。
     CouiPage(title = "关于 OPPower", onBack = onBack, largeTitle = true) {
         AboutHero()
         Group {
             CouiRow("版本", value = BuildConfig.VERSION_NAME)
             Divider()
-            CouiRow("适用设备", value = "RMX8899 / ColorOS 17")
+            CouiRow("当前设备", value = profile.displayName)
+            Divider()
+            CouiRow("电池结构", value = profile.cellLabel)
+            Divider()
+            CouiRow("适配方式", value = "按设备能力探测，不绑定机型")
             Divider()
             CouiRow("网络与上传", value = "无网络权限，仅存本机")
         }
