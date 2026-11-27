@@ -243,6 +243,15 @@ class ShizukuGateway(context: Context) : ChargingGateway {
     }.getOrNull()
 
     /**
+     * 设备树里的电芯数。只在判断电池结构时调用一次，不要放进 1 秒控制循环。
+     * 返回 null 表示没权限或本机读不到，调用方应退回应用域探测。
+     */
+    fun readDeviceCellCount(): Int? = runCatching {
+        if (!isAvailable || !hasPermission) return@runCatching null
+        awaitService(COMMAND_TIMEOUT_MILLIS).readDeviceCellCount().takeIf { it in 1..4 }
+    }.getOrNull()
+
+    /**
      * 热控诊断快照（只读）。返回原始的多行文本，由 UI 侧解析成键值对——
      * 这样服务端将来多吐几行不需要改 AIDL 签名。
      */
