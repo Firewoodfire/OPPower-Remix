@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import com.oppower.battery.BatteryReader
 import com.oppower.battery.ChargeInsight
 import com.oppower.battery.ChargeInspector
+import com.oppower.battery.DeviceProfiles
 import com.oppower.controller.ChargingController
 import com.oppower.data.PreferencesStore
 import com.oppower.history.ChargeRecordAccumulator
@@ -128,6 +129,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        refineDeviceProfile()
+
         startDetectionLoop()
 
         viewModelScope.launch {
@@ -220,6 +223,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setPageVisible(visible: Boolean) {
         pageVisible.value = visible
+    }
+
+    /**
+     * 双芯判定分两步：启动时只能靠应用域探测（`power_supply` 的目录布局），
+     * 这一步读不到设备树；Shizuku 授权后补读一次 `oplus,batt_num` 把结论纠正过来。
+     *
+     * 只在用户没亲手改过开关时改写设置——否则这里会把用户刚关掉的开关重新打开。
+     */
+    private fun refineDeviceProfile() {
+        viewModelScope.launch {
+            val privilegedCount = withContext(Dispatchers.IO) {
+                runCatching { shizuku.readDeviceCellCount() }.getOrNull()
+            }
+            val profile = withContext(Dispatchers.IO) {
+                DeviceProfiles.refine(getApplication<Application>(), privilegedCount)
+            }
+            if (profile.isDualCell &&
+                !store.doubleCellUserSet() &&
+                !mutable.value.settings.doubleCellCorrection
+            ) {
+                updateSettings { it.copy(doubleCellCorrection = true) }
+            }
+        }
     }
 
     fun updateSettings(transform: (RuntimeSettings) -> RuntimeSettings) {
